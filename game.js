@@ -41,7 +41,30 @@ class Game {
             maxFlySpeed: 8,
             currentFlySpeed: 0,
             ammo: 20,
-            isFullAuto: true // Add fire mode property
+            isFullAuto: true, // Add fire mode property
+            currentWeapon: 'rifle', // Default weapon
+            isZoomed: false
+        };
+
+        // Add weapon properties
+        this.weapons = {
+            rifle: {
+                shootInterval: 100,
+                bulletSpeed: 15,
+                spread: 0
+            },
+            shotgun: {
+                shootInterval: 500,
+                bulletSpeed: 12,
+                spread: 0.5,
+                pellets: 15
+            },
+            sniper: {
+                shootInterval: 1000,
+                bulletSpeed: 25,
+                spread: 0,
+                zoomFactor: 2
+            }
         };
 
         // Input handling
@@ -103,10 +126,10 @@ class Game {
         
         // Add grenade properties
         this.grenades = [];
-        this.grenadeRadius = 50;
+        this.grenadeRadius = 25; // Reduced from 50
         this.grenadeWidth = 5;
         this.isChargingGrenade = false;
-        this.chargedGrenadeMultiplier = 50; // Reduced from 100 to 50 (2x weaker)
+        this.chargedGrenadeMultiplier = 10; // Reduced from 50
         
         // Add cursor properties
         this.cursor = {
@@ -117,7 +140,17 @@ class Game {
         // Add mouse button state
         this.mouseDown = false;
         this.lastShotTime = 0;
-        this.shootInterval = 100; // Time between shots in milliseconds
+        this.shootInterval = this.weapons.rifle.shootInterval;
+        
+        // Increase grenade throw power
+        this.grenadeThrowPower = 25; // Increased from 15
+        
+        // Add wooden wall properties
+        this.walls = [];
+        this.wallHealth = 5; // Number of hits to destroy
+        this.wallWidth = 30;
+        this.wallHeight = 60;
+        this.wallDistance = 50; // Distance in front of player
         
         // Bind event listeners
         document.addEventListener('keydown', this.handleKeyDown.bind(this));
@@ -206,6 +239,22 @@ class Game {
             case 'shift': // Add shift key handler
                 this.player.isFullAuto = !this.player.isFullAuto;
                 break;
+            case '1':
+                this.player.currentWeapon = 'rifle';
+                this.shootInterval = this.weapons.rifle.shootInterval;
+                this.player.isZoomed = false;
+                break;
+            case '2':
+                this.player.currentWeapon = 'shotgun';
+                this.shootInterval = this.weapons.shotgun.shootInterval;
+                break;
+            case '3':
+                this.player.currentWeapon = 'sniper';
+                this.shootInterval = this.weapons.sniper.shootInterval;
+                break;
+            case '4':
+                this.createWoodWall();
+                break;
         }
     }
 
@@ -248,6 +297,8 @@ class Game {
                     this.mouseDown = false;
                 }
             }
+        } else if (event.button === 2 && this.player.currentWeapon === 'sniper') { // Right click for sniper zoom
+            this.player.isZoomed = !this.player.isZoomed;
         }
     }
 
@@ -259,18 +310,42 @@ class Game {
 
     shoot() {
         const currentTime = Date.now();
-        if (currentTime - this.lastShotTime >= this.shootInterval && this.player.ammo > 0) {
-            const laserDx = Math.cos(this.player.gunAngle);
-            const laserDy = Math.sin(this.player.gunAngle);
+        const weapon = this.weapons[this.player.currentWeapon];
+        
+        if (currentTime - this.lastShotTime >= this.shootInterval) {
+            if (this.player.currentWeapon === 'shotgun') {
+                // Only shoot if we have enough ammo for all pellets
+                if (this.player.ammo >= weapon.pellets) {
+                    // Shotgun spread - uses one ammo per pellet
+                    for (let i = 0; i < weapon.pellets; i++) {
+                        const spread = (Math.random() - 0.5) * weapon.spread;
+                        const angle = this.player.gunAngle + spread;
+                        const laserDx = Math.cos(angle);
+                        const laserDy = Math.sin(angle);
+                        
+                        this.lasers.push({
+                            x: this.player.x + 25 * laserDx,
+                            y: this.player.y + 25 * laserDy,
+                            dx: laserDx * weapon.bulletSpeed,
+                            dy: laserDy * weapon.bulletSpeed
+                        });
+                        this.player.ammo--; // Decrease ammo for each pellet
+                    }
+                }
+            } else if (this.player.ammo > 0) {
+                // Rifle or Sniper
+                const laserDx = Math.cos(this.player.gunAngle);
+                const laserDy = Math.sin(this.player.gunAngle);
+                
+                this.lasers.push({
+                    x: this.player.x + 25 * laserDx,
+                    y: this.player.y + 25 * laserDy,
+                    dx: laserDx * weapon.bulletSpeed,
+                    dy: laserDy * weapon.bulletSpeed
+                });
+                this.player.ammo--;
+            }
             
-            this.lasers.push({
-                x: this.player.x + 25 * laserDx,
-                y: this.player.y + 25 * laserDy,
-                dx: laserDx * this.laserSpeed,
-                dy: laserDy * this.laserSpeed
-            });
-            
-            this.player.ammo--; // Decrease ammo count
             this.lastShotTime = currentTime;
         }
     }
@@ -423,6 +498,40 @@ class Game {
 
         // Update lasers and check for terrain collision
         this.lasers = this.lasers.filter(laser => {
+            // Check wall collisions
+            for (let i = this.walls.length - 1; i >= 0; i--) {
+                const wall = this.walls[i];
+                const dx = laser.dx;
+                const dy = laser.dy;
+                const laserEndX = laser.x + dx;
+                const laserEndY = laser.y + dy;
+                
+                // Transform laser coordinates relative to wall rotation
+                const relativeX = laser.x - wall.x;
+                const relativeY = laser.y - wall.y;
+                const rotatedX = relativeX * Math.cos(-wall.rotation) - relativeY * Math.sin(-wall.rotation);
+                const rotatedY = relativeX * Math.sin(-wall.rotation) + relativeY * Math.cos(-wall.rotation);
+                
+                const relativeEndX = laserEndX - wall.x;
+                const relativeEndY = laserEndY - wall.y;
+                const rotatedEndX = relativeEndX * Math.cos(-wall.rotation) - relativeEndY * Math.sin(-wall.rotation);
+                const rotatedEndY = relativeEndX * Math.sin(-wall.rotation) + relativeEndY * Math.cos(-wall.rotation);
+                
+                // Check if laser intersects with wall
+                if (this.lineIntersectsBox(
+                    rotatedX, rotatedY,
+                    rotatedEndX, rotatedEndY,
+                    0, 0,
+                    wall.width, wall.height
+                )) {
+                    wall.health--;
+                    if (wall.health <= 0) {
+                        this.walls.splice(i, 1);
+                    }
+                    return false;
+                }
+            }
+
             for (let i = this.enemies.length - 1; i >= 0; i--) {
                 const enemy = this.enemies[i];
                 const dx = laser.dx;
@@ -888,12 +997,68 @@ class Game {
         this.ctx.fillStyle = this.player.isFullAuto ? '#00ff00' : '#ff9900';
         this.ctx.fillText(this.player.isFullAuto ? 'FULL AUTO' : 'SEMI AUTO', 20, this.canvas.height - 20);
         
+        // Add weapon indicator
+        this.ctx.fillStyle = '#fff';
+        this.ctx.fillText(`WEAPON: ${this.player.currentWeapon.toUpperCase()}`, 20, this.canvas.height - 90);
+        
         if (this.gameState.gameWon) {
             this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
             this.ctx.fillStyle = '#fff';
             this.ctx.font = '40px Arial';
             this.ctx.fillText('You Win!', this.canvas.width/2 - 70, this.canvas.height/2);
+        }
+        
+        // Draw zoomed crosshair for sniper
+        if (this.player.currentWeapon === 'sniper' && this.player.isZoomed) {
+            this.ctx.save();
+            this.ctx.translate(this.cursor.x, this.cursor.y);
+            this.ctx.scale(2, 2);
+            this.ctx.translate(-this.cursor.x, -this.cursor.y);
+            
+            // Draw zoomed crosshair
+            this.ctx.strokeStyle = '#ff0000';
+            this.ctx.lineWidth = 1;
+            this.ctx.beginPath();
+            this.ctx.arc(this.cursor.x, this.cursor.y, 20, 0, Math.PI * 2);
+            this.ctx.moveTo(this.cursor.x - 30, this.cursor.y);
+            this.ctx.lineTo(this.cursor.x + 30, this.cursor.y);
+            this.ctx.moveTo(this.cursor.x, this.cursor.y - 30);
+            this.ctx.lineTo(this.cursor.x, this.cursor.y + 30);
+            this.ctx.stroke();
+            
+            this.ctx.restore();
+        }
+    }
+
+    drawWalls() {
+        for (const wall of this.walls) {
+            const screenX = wall.x - this.viewportX;
+            
+            this.ctx.save();
+            this.ctx.translate(screenX, wall.y);
+            this.ctx.rotate(wall.rotation);
+            
+            // Draw wooden texture
+            this.ctx.fillStyle = '#8B4513';
+            this.ctx.fillRect(-wall.width/2, -wall.height/2, wall.width, wall.height);
+            
+            // Draw wood grain lines
+            this.ctx.strokeStyle = '#654321';
+            this.ctx.lineWidth = 1;
+            for (let i = 0; i < 5; i++) {
+                this.ctx.beginPath();
+                this.ctx.moveTo(-wall.width/2, -wall.height/2 + i * wall.height/5);
+                this.ctx.lineTo(wall.width/2, -wall.height/2 + i * wall.height/5);
+                this.ctx.stroke();
+            }
+            
+            // Draw health indicator
+            const healthPercentage = wall.health / this.wallHealth;
+            this.ctx.fillStyle = `rgba(0, 255, 0, ${healthPercentage})`;
+            this.ctx.fillRect(-wall.width/2, -wall.height/2 - 5, wall.width * healthPercentage, 3);
+            
+            this.ctx.restore();
         }
     }
 
@@ -919,6 +1084,9 @@ class Game {
         // Draw enemies and their bullets
         this.drawEnemies();
         this.drawEnemyBullets();
+        
+        // Draw walls before player
+        this.drawWalls();
         
         // Draw player
         this.drawPlayer();
@@ -1225,13 +1393,12 @@ class Game {
         const dx = this.cursor.x - (this.player.x - this.viewportX);
         const dy = this.cursor.y - this.player.y;
         const angle = Math.atan2(dy, dx);
-        const power = 15; // Base throw power
         
         this.grenades.push({
             x: this.player.x,
             y: this.player.y,
-            speedX: Math.cos(angle) * power,
-            speedY: Math.sin(angle) * power,
+            speedX: Math.cos(angle) * this.grenadeThrowPower,
+            speedY: Math.sin(angle) * this.grenadeThrowPower,
             exploded: false,
             isCharged: true
         });
@@ -1239,25 +1406,25 @@ class Game {
 
     createGrenadeExplosion(x, y, isCharged = false) {
         // Create explosion particles
-        const particleCount = isCharged ? 200 : 50;
+        const particleCount = isCharged ? 100 : 25; // Reduced from 200/50
         for (let i = 0; i < particleCount; i++) {
             const angle = (Math.PI * 2 * i) / particleCount;
-            const speed = isCharged ? (10 + Math.random() * 15) : (5 + Math.random() * 7);
+            const speed = isCharged ? (5 + Math.random() * 8) : (3 + Math.random() * 4); // Reduced speeds
             this.particles.push({
                 x: x,
                 y: y,
                 dx: Math.cos(angle) * speed,
-                dy: Math.sin(angle) * speed - 3,
-                life: isCharged ? 120 : 80,
+                dy: Math.sin(angle) * speed - 2,
+                life: isCharged ? 80 : 40, // Reduced from 120/80
                 color: isCharged ? '#FF0000' : '#FF4400',
-                size: isCharged ? (8 + Math.random() * 8) : (4 + Math.random() * 4)
+                size: isCharged ? (4 + Math.random() * 4) : (2 + Math.random() * 2) // Reduced sizes
             });
         }
 
         // Create hole in terrain
         const multiplier = isCharged ? this.chargedGrenadeMultiplier : 1;
-        // Calculate hole width to be 1/4 of screen width for charged grenades
-        const baseHoleWidth = isCharged ? (this.canvas.width / 4) : (this.canvas.width / 16);
+        // Calculate hole width to be 1/8 of screen width for charged grenades (reduced from 1/4)
+        const baseHoleWidth = isCharged ? (this.canvas.width / 8) : (this.canvas.width / 32);
         const holeWidth = baseHoleWidth * (this.worldWidth / this.canvas.width);
         const holeDepth = this.grenadeRadius * multiplier;
         
@@ -1279,6 +1446,21 @@ class Game {
                 point.y = newHeight;
             }
         }
+    }
+
+    createWoodWall() {
+        // Calculate position in front of player based on gun angle
+        const wallX = this.player.x + Math.cos(this.player.gunAngle) * this.wallDistance;
+        const wallY = this.player.y + Math.sin(this.player.gunAngle) * this.wallDistance;
+        
+        this.walls.push({
+            x: wallX,
+            y: wallY,
+            width: this.wallWidth,
+            height: this.wallHeight,
+            health: this.wallHealth,
+            rotation: this.player.gunAngle
+        });
     }
 }
 
