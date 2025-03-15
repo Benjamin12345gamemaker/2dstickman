@@ -59,6 +59,12 @@ class Game {
         this.resizeCanvas();
         window.addEventListener('resize', this.resizeCanvas.bind(this));
         
+        // Add sprite toggle state
+        this.isSpaceship = true;
+        
+        // Create sprite toggle button
+        this.createSpriteToggleButton();
+        
         this.worldWidth = 6000;
         this.viewportX = 0;
         
@@ -631,29 +637,69 @@ class Game {
         this.updateParticles();
 
         // Handle movement with improved space-like physics
-        if (this.keys.d) {
-            this.player.speedX += this.player.acceleration;
-        }
-        if (this.keys.a) {
-            this.player.speedX -= this.player.acceleration;
-        }
-        if (this.keys.w) {
-            this.player.speedY -= this.player.acceleration;
-        }
-        if (this.keys.s) {
-            this.player.speedY += this.player.acceleration;
-        }
-        
-        // Apply friction to both X and Y movement
-        this.player.speedX *= this.player.friction;
-        this.player.speedY *= this.player.friction;
+        if (this.isSpaceship) {
+            // Spaceship movement - can fly freely
+            if (this.keys.d) {
+                this.player.speedX += this.player.acceleration;
+            }
+            if (this.keys.a) {
+                this.player.speedX -= this.player.acceleration;
+            }
+            if (this.keys.w) {
+                this.player.speedY -= this.player.acceleration;
+            }
+            if (this.keys.s) {
+                this.player.speedY += this.player.acceleration;
+            }
+            
+            // Apply friction to both X and Y movement
+            this.player.speedX *= this.player.friction;
+            this.player.speedY *= this.player.friction;
 
-        // Cap speed at 45 for both directions
-        const currentSpeed = Math.sqrt(this.player.speedX * this.player.speedX + this.player.speedY * this.player.speedY);
-        if (currentSpeed > 45) {
-            const angle = Math.atan2(this.player.speedY, this.player.speedX);
-            this.player.speedX = Math.cos(angle) * 45;
-            this.player.speedY = Math.sin(angle) * 45;
+            // Cap speed at 45 for both directions
+            const currentSpeed = Math.sqrt(this.player.speedX * this.player.speedX + this.player.speedY * this.player.speedY);
+            if (currentSpeed > 45) {
+                const angle = Math.atan2(this.player.speedY, this.player.speedX);
+                this.player.speedX = Math.cos(angle) * 45;
+                this.player.speedY = Math.sin(angle) * 45;
+            }
+        } else {
+            // Stick figure movement - affected by gravity
+            if (this.keys.d) {
+                this.player.speedX += this.player.acceleration;
+            }
+            if (this.keys.a) {
+                this.player.speedX -= this.player.acceleration;
+            }
+            
+            // Apply gravity
+            this.player.speedY += 0.5;
+            
+            // Cap falling speed
+            if (this.player.speedY > 20) {
+                this.player.speedY = 20;
+            }
+            
+            // Cap horizontal speed
+            this.player.speedX = Math.min(15, Math.max(-15, this.player.speedX));
+            
+            // Apply horizontal friction
+            this.player.speedX *= 0.9;
+            
+            // Check if on ground
+            const groundHeight = this.getGroundHeight(this.player.x);
+            if (this.player.y >= groundHeight - this.player.height) {
+                this.player.y = groundHeight - this.player.height;
+                this.player.speedY = 0;
+                this.player.canJump = true;
+            }
+            
+            // Handle jumping (only when on ground)
+            if (this.keys.w && this.player.canJump) {
+                this.player.speedY = -15;
+                this.player.canJump = false;
+                this.audio.play('jump');
+            }
         }
 
         // Update player position
@@ -856,37 +902,85 @@ class Game {
         
         this.ctx.save();
         this.ctx.translate(screenX + this.player.width/2, this.player.y + this.player.height/2);
-        this.ctx.rotate(this.player.gunAngle);
         
-        // Draw spaceship
-        this.ctx.strokeStyle = '#4488ff';
-        this.ctx.lineWidth = 3;
-        
-        // Ship body
-        this.ctx.beginPath();
-        this.ctx.moveTo(25, 0); // Nose
-        this.ctx.lineTo(-15, -12); // Top wing
-        this.ctx.lineTo(-10, 0); // Back middle
-        this.ctx.lineTo(-15, 12); // Bottom wing
-        this.ctx.lineTo(25, 0); // Back to nose
-        this.ctx.stroke();
-        
-        // Engine flames
-        if (this.keys.w || this.keys.a || this.keys.d) {
+        if (this.isSpaceship) {
+            // Draw spaceship
+            this.ctx.rotate(this.player.gunAngle);
+            this.ctx.strokeStyle = '#4488ff';
+            this.ctx.lineWidth = 3;
+            
+            // Ship body
             this.ctx.beginPath();
-            const flameLength = 15 + Math.random() * 10;
-            this.ctx.moveTo(-10, -2);
-            this.ctx.lineTo(-10 - flameLength, 0);
-            this.ctx.lineTo(-10, 2);
-            this.ctx.strokeStyle = '#ff4400';
+            this.ctx.moveTo(25, 0); // Nose
+            this.ctx.lineTo(-15, -12); // Top wing
+            this.ctx.lineTo(-10, 0); // Back middle
+            this.ctx.lineTo(-15, 12); // Bottom wing
+            this.ctx.lineTo(25, 0); // Back to nose
             this.ctx.stroke();
+            
+            // Engine flames
+            if (this.keys.w || this.keys.a || this.keys.d) {
+                this.ctx.beginPath();
+                const flameLength = 15 + Math.random() * 10;
+                this.ctx.moveTo(-10, -2);
+                this.ctx.lineTo(-10 - flameLength, 0);
+                this.ctx.lineTo(-10, 2);
+                this.ctx.strokeStyle = '#ff4400';
+                this.ctx.stroke();
+            }
+            
+            // Cockpit
+            this.ctx.beginPath();
+            this.ctx.arc(5, 0, 5, 0, Math.PI * 2);
+            this.ctx.strokeStyle = '#88ccff';
+            this.ctx.stroke();
+        } else {
+            // Draw stick figure
+            this.ctx.rotate(0); // Reset rotation for stick figure
+            this.ctx.strokeStyle = '#000000';
+            this.ctx.lineWidth = 2;
+            
+            // Head
+            this.ctx.beginPath();
+            this.ctx.arc(0, -15, 5, 0, Math.PI * 2);
+            this.ctx.stroke();
+            
+            // Body
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, -10);
+            this.ctx.lineTo(0, 10);
+            this.ctx.stroke();
+            
+            // Arms
+            this.ctx.beginPath();
+            // Rotate arms based on gun angle
+            const armLength = 8;
+            const rightArmX = Math.cos(this.player.gunAngle) * armLength;
+            const rightArmY = Math.sin(this.player.gunAngle) * armLength;
+            
+            this.ctx.moveTo(-8, 0); // Left arm
+            this.ctx.lineTo(0, 0);
+            this.ctx.lineTo(rightArmX, rightArmY); // Right arm follows gun angle
+            this.ctx.stroke();
+            
+            // Legs
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, 10);
+            this.ctx.lineTo(-8, 20);
+            this.ctx.moveTo(0, 10);
+            this.ctx.lineTo(8, 20);
+            this.ctx.stroke();
+            
+            // Draw gun
+            this.ctx.beginPath();
+            this.ctx.save();
+            this.ctx.translate(rightArmX, rightArmY);
+            this.ctx.rotate(this.player.gunAngle);
+            this.ctx.moveTo(0, 0);
+            this.ctx.lineTo(15, 0);
+            this.ctx.stroke();
+            this.ctx.restore();
         }
-        
-        // Cockpit
-        this.ctx.beginPath();
-        this.ctx.arc(5, 0, 5, 0, Math.PI * 2);
-        this.ctx.strokeStyle = '#88ccff';
-        this.ctx.stroke();
         
         this.ctx.restore();
         
@@ -1525,6 +1619,28 @@ class Game {
         // Set cooldown
         this.nukeReady = false;
         this.nukeCooldown = 30 * 60; // 30 seconds at 60 FPS
+    }
+
+    createSpriteToggleButton() {
+        const button = document.createElement('button');
+        button.textContent = 'Switch to Stick Figure';
+        button.style.position = 'fixed';
+        button.style.top = '10px';
+        button.style.right = '10px';
+        button.style.padding = '10px';
+        button.style.backgroundColor = '#4488ff';
+        button.style.color = 'white';
+        button.style.border = 'none';
+        button.style.borderRadius = '5px';
+        button.style.cursor = 'pointer';
+        button.style.zIndex = '1000';
+        
+        button.addEventListener('click', () => {
+            this.isSpaceship = !this.isSpaceship;
+            button.textContent = this.isSpaceship ? 'Switch to Stick Figure' : 'Switch to Spaceship';
+        });
+        
+        document.body.appendChild(button);
     }
 }
 
