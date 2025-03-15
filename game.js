@@ -234,7 +234,7 @@ class Game {
         this.terrain = [];
         const segments = 400;
         const segmentWidth = this.worldWidth / segments;
-        let currentHeight = this.canvas.height * 0.6;
+        let currentHeight = this.canvas.height * 0.8; // Changed from 0.6 to 0.8 for lower floor
         let patternPhase = 0; // 0: upslope, 1: flat, 2: downslope
         let flatSegments = 0;
         const slopeAngle = 20 * (Math.PI / 180);
@@ -277,8 +277,8 @@ class Game {
             }
             
             // Keep height within bounds
-            currentHeight = Math.max(this.canvas.height * 0.3, 
-                          Math.min(this.canvas.height * 0.8, currentHeight));
+            currentHeight = Math.max(this.canvas.height * 0.6,  // Changed from 0.3 to 0.6
+                          Math.min(this.canvas.height * 0.9, currentHeight));  // Changed from 0.8 to 0.9
             
             this.terrain.push({
                 x: x,
@@ -843,6 +843,14 @@ class Game {
     }
 
     drawMetallicTerrain() {
+        // Draw appropriate background based on sprite mode
+        if (this.isSpaceship) {
+            this.drawGalaxyBackground();
+        } else {
+            this.drawCityBackground();
+        }
+
+        // Draw terrain
         this.ctx.beginPath();
         this.ctx.moveTo(0, this.canvas.height);
         
@@ -861,16 +869,24 @@ class Game {
         this.ctx.lineTo(0, this.canvas.height);
         this.ctx.closePath();
         
-        // Metallic gradient
+        // Terrain gradient based on current mode
         const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
-        gradient.addColorStop(0, '#4a4a4a');
-        gradient.addColorStop(0.5, '#6a6a6a');
-        gradient.addColorStop(1, '#3a3a3a');
+        if (this.isSpaceship) {
+            // Space terrain
+            gradient.addColorStop(0, '#1a1a3a');
+            gradient.addColorStop(0.5, '#2a2a4a');
+            gradient.addColorStop(1, '#0a0a2a');
+        } else {
+            // City concrete
+            gradient.addColorStop(0, '#555555');
+            gradient.addColorStop(0.5, '#666666');
+            gradient.addColorStop(1, '#444444');
+        }
         this.ctx.fillStyle = gradient;
         this.ctx.fill();
         
-        // Metallic shine
-        this.ctx.strokeStyle = '#808080';
+        // Terrain edge highlight
+        this.ctx.strokeStyle = this.isSpaceship ? '#4444aa' : '#777777';
         this.ctx.lineWidth = 2;
         this.ctx.stroke();
         
@@ -879,6 +895,109 @@ class Game {
             const index = Math.floor(x / (this.worldWidth / this.terrain.length));
             if (this.terrain[index]) {
                 this.terrain[index].y = y;
+            }
+        }
+    }
+
+    drawGalaxyBackground() {
+        // Create dark space gradient
+        const spaceGradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+        spaceGradient.addColorStop(0, '#000033');
+        spaceGradient.addColorStop(0.5, '#000066');
+        spaceGradient.addColorStop(1, '#000044');
+        
+        // Fill background
+        this.ctx.fillStyle = spaceGradient;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Draw stars (using a deterministic pattern based on viewport)
+        const viewportSection = Math.floor(this.viewportX / 100);
+        this.ctx.fillStyle = '#FFFFFF';
+        
+        for (let i = 0; i < 200; i++) {
+            const seed = i * (viewportSection + 1);
+            const x = (Math.sin(seed) * 10000) % this.canvas.width;
+            const y = (Math.cos(seed) * 10000) % this.canvas.height;
+            const size = (Math.sin(seed * 2) + 1) * 2;
+            
+            // Twinkle effect
+            const alpha = (Math.sin(Date.now() * 0.003 + seed) + 1) * 0.5;
+            this.ctx.globalAlpha = alpha;
+            
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, size, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        
+        // Draw distant nebulas
+        this.ctx.globalAlpha = 0.2;
+        for (let i = 0; i < 3; i++) {
+            const seed = i * (viewportSection + 1);
+            const x = (Math.sin(seed) * 10000) % this.canvas.width;
+            const y = (Math.cos(seed) * 10000) % (this.canvas.height * 0.7);
+            
+            const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, 200);
+            gradient.addColorStop(0, '#4444FF');
+            gradient.addColorStop(0.5, '#2222AA');
+            gradient.addColorStop(1, 'transparent');
+            
+            this.ctx.fillStyle = gradient;
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, 200, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        
+        this.ctx.globalAlpha = 1;
+    }
+
+    drawCityBackground() {
+        // Create night sky gradient
+        const skyGradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height * 0.9);
+        skyGradient.addColorStop(0, '#000033');
+        skyGradient.addColorStop(0.5, '#000066');
+        skyGradient.addColorStop(1, '#001133');
+        
+        // Fill background
+        this.ctx.fillStyle = skyGradient;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Draw stars
+        this.ctx.fillStyle = '#FFFFFF';
+        this.ctx.globalAlpha = 0.3;
+        const viewportSection = Math.floor(this.viewportX / 100);
+        
+        for (let i = 0; i < 100; i++) {
+            const seed = i * (viewportSection + 1);
+            const x = (Math.sin(seed) * 10000) % this.canvas.width;
+            const y = (Math.cos(seed) * 10000) % (this.canvas.height * 0.5);
+            
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, 1, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        
+        // Draw city skyline
+        this.ctx.globalAlpha = 1;
+        const buildingCount = Math.ceil(this.canvas.width / 50);
+        const baseHeight = 300;
+        
+        for (let i = 0; i < buildingCount; i++) {
+            const seed = (i + viewportSection) * 123.456;
+            const x = i * 50 - (this.viewportX % 50);
+            const height = baseHeight + Math.sin(seed) * 100;
+            
+            // Draw building
+            this.ctx.fillStyle = '#111111';
+            this.ctx.fillRect(x, this.canvas.height * 0.9 - height, 40, height);
+            
+            // Draw windows
+            this.ctx.fillStyle = '#FFFF44';
+            for (let wy = 0; wy < height; wy += 20) {
+                for (let wx = 0; wx < 40; wx += 10) {
+                    if (Math.sin(seed + wx + wy) > 0.3) { // Random window pattern
+                        this.ctx.fillRect(x + wx, this.canvas.height * 0.9 - height + wy, 6, 12);
+                    }
+                }
             }
         }
     }
