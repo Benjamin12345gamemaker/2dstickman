@@ -103,7 +103,7 @@ class Game {
         this.isSpaceship = true;
         
         // Camera zoom (smaller number = more zoomed out)
-        this.cameraZoom = 0.6;
+        this.cameraZoom = 1.0;
         
         // Rest of constructor...
         
@@ -120,19 +120,19 @@ class Game {
         this.player = {
             x: 100,
             y: initialGroundHeight - 40,
-            width: 40,  // Increased for ship
-            height: 24, // Adjusted for ship
+            width: 40,
+            height: 24,
             health: 100,
             maxHealth: 100,
             speedX: 0,
             speedY: 0,
-            maxSpeedX: 8,        // Increased max speed
-            acceleration: 8,    // Very high acceleration for instant speed
-            friction: 1,       // No friction for maintaining speed
-            gravity: 0.8,         // Kept the same for good ground control
-            jumpForce: -45,
+            maxSpeedX: 8,
+            acceleration: 0.8,    // Reduced for better ship control
+            friction: .95,      // Increased friction to prevent excessive gliding
+            gravity: 0.6,        // Reduced gravity for better jump control
+            jumpForce: -12,      // Adjusted jump force
             canJump: true,
-            doubleJump: false,
+            doubleJump: true,    // Added double jump
             isSliding: false,
             rotation: 0,
             gunAngle: 0,
@@ -873,33 +873,37 @@ class Game {
             }
             
             // Apply friction to both X and Y movement
-            this.player.speedX *= this.player.friction;
-            this.player.speedY *= this.player.friction;
+            if (this.player.currentWeapon === 'launchGun' && !this.player.canJump) {
+                // Much lower friction when using launch gun in the air
+                this.player.speedX *= 0.99;
+                this.player.speedY *= 0.99;
+            } else {
+                this.player.speedX *= this.player.friction;
+                this.player.speedY *= this.player.friction;
+            }
 
             // Cap speed at 45 for both directions
             const currentSpeed = Math.sqrt(this.player.speedX * this.player.speedX + this.player.speedY * this.player.speedY);
-            if (currentSpeed > 20) {  // Changed from 12 to 20 for faster spaceship speed
+            if (currentSpeed > 122) {  // Changed from 61 to 122 (2x faster)
                 const angle = Math.atan2(this.player.speedY, this.player.speedX);
-                this.player.speedX = Math.cos(angle) * 20;  // Changed from 12 to 20
-                this.player.speedY = Math.sin(angle) * 20;  // Changed from 12 to 20
+                this.player.speedX = Math.cos(angle) * 122;  // Changed from 61 to 122
+                this.player.speedY = Math.sin(angle) * 122;  // Changed from 61 to 122
             }
         } else {
             // Stick figure movement - affected by gravity
             if (this.keys.d) {
-                this.player.speedX = this.player.maxSpeedX;  // Instant max speed right
+                this.player.speedX = Math.min(this.player.speedX + this.player.acceleration, this.player.maxSpeedX);
             }
             if (this.keys.a) {
-                this.player.speedX = -this.player.maxSpeedX;  // Instant max speed left
+                this.player.speedX = Math.max(this.player.speedX - this.player.acceleration, -this.player.maxSpeedX);
             }
             if (!this.keys.a && !this.keys.d) {
-                this.player.speedX = 0;  // Instant stop when no keys pressed
+                // Apply friction to gradually slow down
+                this.player.speedX *= this.player.friction;
             }
             
             // Apply gravity
-            this.player.speedY += this.player.currentWeapon === 'launchGun' ? 0.3 : 0.4;
-            
-            // Cap horizontal speed - increased for stick figure
-            this.player.speedX = Math.min(Math.max(this.player.speedX, -6), 6); // Increased speed cap from 3 to 6
+            this.player.speedY += this.player.gravity;
             
             // Get ground height for collision
             const groundHeight = this.getGroundHeight(this.player.x);
@@ -909,29 +913,21 @@ class Game {
                 this.player.y = groundHeight - this.player.height;
                 this.player.speedY = 0;
                 this.player.canJump = true;
+                this.player.doubleJump = true;
             }
             
-            // Apply horizontal movement only if not colliding with ground
-            const newX = this.player.x + this.player.speedX;
-            const newGroundHeight = this.getGroundHeight(newX);
-            if (this.player.y + this.player.height < newGroundHeight) {
-                this.player.x = newX;
-            } else {
-                // If would collide with ground, check if can slide up slope
-                const slope = (newGroundHeight - groundHeight) / Math.abs(this.player.speedX);
-                if (Math.abs(slope) < 1.0) { // Maximum slope that can be climbed
-                    this.player.x = newX;
-                    this.player.y = newGroundHeight - this.player.height;
-                } else {
-                    this.player.speedX = 0; // Stop horizontal movement if slope too steep
+            // Handle jumping (with double jump)
+            if (this.keys.w) {
+                if (this.player.canJump) {
+                    this.player.speedY = this.player.jumpForce;
+                    this.player.canJump = false;
+                    this.audio.play('jump');
+                } else if (this.player.doubleJump) {
+                    this.player.speedY = this.player.jumpForce * 0.8; // Slightly weaker double jump
+                    this.player.doubleJump = false;
+                    this.audio.play('jump');
                 }
-            }
-            
-            // Handle jumping (only when on ground)
-            if (this.keys.w && this.player.canJump) {
-                this.player.speedY = this.player.currentWeapon === 'launchGun' ? -18 : -15;
-                this.player.canJump = false;
-                this.audio.play('jump');
+                this.keys.w = false; // Reset jump key to prevent holding
             }
         }
 
@@ -1951,24 +1947,48 @@ class Game {
     createGrenadeExplosion(x, y, isCharged = false) {
         this.audio.play('explosion');
         // Create explosion particles
-        const particleCount = isCharged ? 100 : 25; // Reduced from 200/50
+        const particleCount = isCharged ? 100 : 25;
         for (let i = 0; i < particleCount; i++) {
             const angle = (Math.PI * 2 * i) / particleCount;
-            const speed = isCharged ? (5 + Math.random() * 8) : (3 + Math.random() * 4); // Reduced speeds
+            const speed = isCharged ? (5 + Math.random() * 8) : (3 + Math.random() * 4);
             this.particles.push({
                 x: x,
                 y: y,
                 dx: Math.cos(angle) * speed,
                 dy: Math.sin(angle) * speed - 2,
-                life: isCharged ? 80 : 40, // Reduced from 120/80
+                life: isCharged ? 80 : 40,
                 color: isCharged ? '#FF0000' : '#FF4400',
-                size: isCharged ? (4 + Math.random() * 4) : (2 + Math.random() * 2) // Reduced sizes
+                size: isCharged ? (4 + Math.random() * 4) : (2 + Math.random() * 2)
             });
         }
 
+        // Calculate blast radius
+        const blastRadius = isCharged ? 300 : 150;
+
+        // Check for enemies in blast radius
+        this.enemies = this.enemies.filter(enemy => {
+            const dx = enemy.x - x;
+            const dy = enemy.y - y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance <= blastRadius) {
+                // Enemy is within blast radius - kill them
+                enemy.isDying = true;
+                enemy.deathTimer = 0;
+                enemy.speedY = -5;
+                enemy.color = '#000000';
+                enemy.canShoot = false;
+                this.deadEnemies.push(enemy);
+                this.createBloodEffect(enemy.x, enemy.y);
+                this.audio.play('enemyDeath');
+                this.gameState.killCount++;
+                return false;
+            }
+            return true;
+        });
+
         // Create hole in terrain
         const multiplier = isCharged ? this.chargedGrenadeMultiplier : 1;
-        // Calculate hole width to be 1/8 of screen width for charged grenades (reduced from 1/4)
         const baseHoleWidth = isCharged ? (this.canvas.width / 8) : (this.canvas.width / 32);
         const holeWidth = baseHoleWidth * (this.worldWidth / this.canvas.width);
         const holeDepth = this.grenadeRadius * multiplier;
@@ -1981,11 +2001,9 @@ class Game {
                 const distanceFromCenter = Math.abs(dx) / holeWidth;
                 const deformation = holeDepth * (1 - distanceFromCenter * distanceFromCenter);
                 
-                // Get current deformation or use original height
                 const currentHeight = this.terrainDamage.get(Math.floor(point.x)) || point.originalY;
                 const newHeight = currentHeight + deformation;
                 
-                // Store deformation
                 const key = Math.floor(point.x);
                 this.terrainDamage.set(key, newHeight);
                 point.y = newHeight;
