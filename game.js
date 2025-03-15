@@ -131,7 +131,7 @@ class Game {
                 shootInterval: 500,
                 bulletSpeed: 20,
                 spread: 0,
-                launchForce: 50,
+                launchForce: 40,  // Changed from 400 to 40 (80% of 50)
                 color: '#4488ff'
             }
         };
@@ -682,6 +682,34 @@ class Game {
         // Update particles
         this.updateParticles();
 
+        // Update grenades
+        this.grenades = this.grenades.filter(grenade => {
+            // Apply gravity and movement
+            grenade.speedY += 0.5;
+            grenade.x += grenade.speedX;
+            grenade.y += grenade.speedY;
+            
+            // Check for terrain collision
+            const terrainY = this.getGroundHeight(grenade.x);
+            if (grenade.y >= terrainY) {
+                this.createGrenadeExplosion(grenade.x, grenade.y, grenade.isCharged);
+                return false;
+            }
+            
+            // Check for wall collisions
+            for (let i = this.walls.length - 1; i >= 0; i--) {
+                const wall = this.walls[i];
+                if (Math.abs(grenade.x - wall.x) < wall.width/2 &&
+                    grenade.y > wall.y &&
+                    grenade.y < wall.y + wall.height) {
+                    this.createGrenadeExplosion(grenade.x, grenade.y, grenade.isCharged);
+                    return false;
+                }
+            }
+            
+            return true;
+        });
+
         // Handle movement with improved space-like physics
         if (this.isSpaceship) {
             // Spaceship movement - can fly freely
@@ -727,7 +755,7 @@ class Game {
             }
             
             // Cap horizontal speed
-            this.player.speedX = Math.min(15, Math.max(-15, this.player.speedX));
+            this.player.speedX = Math.min(30, Math.max(-30, this.player.speedX));  // Changed from 15 to 30
             
             // Apply horizontal friction
             this.player.speedX *= 0.9;
@@ -794,8 +822,8 @@ class Game {
             return true;
         });
         
-        // Update viewport to keep player centered
-        this.viewportX = this.player.x - this.canvas.width / 2;
+        // Update viewport to allow player to move closer to edges
+        this.viewportX = this.player.x - (this.canvas.width * 0.8);  // Changed from canvas.width/3 to canvas.width * 0.8
 
         // Generate more terrain if needed
         if (this.player.x > this.worldWidth - this.canvas.width) {
@@ -995,55 +1023,9 @@ class Game {
     }
 
     drawCityBackground() {
-        // Create night sky gradient
-        const skyGradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height * 0.9);
-        skyGradient.addColorStop(0, '#000033');
-        skyGradient.addColorStop(0.5, '#000066');
-        skyGradient.addColorStop(1, '#001133');
-        
-        // Fill background
-        this.ctx.fillStyle = skyGradient;
+        // Fill background with solid black
+        this.ctx.fillStyle = '#000000';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        
-        // Draw stars
-        this.ctx.fillStyle = '#FFFFFF';
-        this.ctx.globalAlpha = 0.3;
-        const viewportSection = Math.floor(this.viewportX / 100);
-        
-        for (let i = 0; i < 100; i++) {
-            const seed = i * (viewportSection + 1);
-            const x = (Math.sin(seed) * 10000) % this.canvas.width;
-            const y = (Math.cos(seed) * 10000) % (this.canvas.height * 0.5);
-            
-            this.ctx.beginPath();
-            this.ctx.arc(x, y, 1, 0, Math.PI * 2);
-            this.ctx.fill();
-        }
-        
-        // Draw city skyline
-        this.ctx.globalAlpha = 1;
-        const buildingCount = Math.ceil(this.canvas.width / 50);
-        const baseHeight = 300;
-        
-        for (let i = 0; i < buildingCount; i++) {
-            const seed = (i + viewportSection) * 123.456;
-            const x = i * 50 - (this.viewportX % 50);
-            const height = baseHeight + Math.sin(seed) * 100;
-            
-            // Draw building
-            this.ctx.fillStyle = '#111111';
-            this.ctx.fillRect(x, this.canvas.height * 0.9 - height, 40, height);
-            
-            // Draw windows
-            this.ctx.fillStyle = '#FFFF44';
-            for (let wy = 0; wy < height; wy += 20) {
-                for (let wx = 0; wx < 40; wx += 10) {
-                    if (Math.sin(seed + wx + wy) > 0.3) { // Random window pattern
-                        this.ctx.fillRect(x + wx, this.canvas.height * 0.9 - height + wy, 6, 12);
-                    }
-                }
-            }
-        }
     }
 
     drawLasers() {
@@ -1069,7 +1051,7 @@ class Game {
         if (this.isSpaceship) {
             // Draw spaceship
             this.ctx.rotate(this.player.gunAngle);
-            this.ctx.strokeStyle = '#4488ff';
+            this.ctx.strokeStyle = '#00FF00';
             this.ctx.lineWidth = 3;
             
             // Ship body
@@ -1095,12 +1077,12 @@ class Game {
             // Cockpit
             this.ctx.beginPath();
             this.ctx.arc(5, 0, 5, 0, Math.PI * 2);
-            this.ctx.strokeStyle = '#88ccff';
+            this.ctx.strokeStyle = '#00FF00';
             this.ctx.stroke();
         } else {
             // Draw stick figure
             this.ctx.rotate(0); // Reset rotation for stick figure
-            this.ctx.strokeStyle = '#000000';
+            this.ctx.strokeStyle = '#00FF00';
             this.ctx.lineWidth = 2;
             
             // Head
@@ -1633,18 +1615,27 @@ class Game {
     }
 
     throwChargedGrenade() {
+        // Calculate throw direction based on cursor position
         const dx = this.cursor.x - (this.player.x - this.viewportX);
         const dy = this.cursor.y - this.player.y;
         const angle = Math.atan2(dy, dx);
         
+        // Calculate initial position slightly in front of player
+        const offsetX = Math.cos(angle) * 20;
+        const offsetY = Math.sin(angle) * 20;
+        
+        // Create and throw the grenade
         this.grenades.push({
-            x: this.player.x,
-            y: this.player.y,
+            x: this.player.x + offsetX,
+            y: this.player.y + offsetY,
             speedX: Math.cos(angle) * this.grenadeThrowPower,
-            speedY: Math.sin(angle) * this.grenadeThrowPower,
+            speedY: Math.sin(angle) * this.grenadeThrowPower - 5, // Add slight upward boost
             exploded: false,
-            isCharged: true
+            isCharged: this.isChargingGrenade
         });
+        
+        // Play throw sound
+        this.audio.play('shoot');
     }
 
     createGrenadeExplosion(x, y, isCharged = false) {
