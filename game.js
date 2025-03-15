@@ -493,6 +493,22 @@ class Game {
             return;
         }
 
+        // Check for retry button click on death or victory screen
+        if ((this.player.isDead || this.gameState.gameWon) && this.retryButton) {
+            const mouseX = event.clientX - this.canvas.getBoundingClientRect().left;
+            const mouseY = event.clientY - this.canvas.getBoundingClientRect().top;
+
+            if (mouseX >= this.retryButton.x && 
+                mouseX <= this.retryButton.x + this.retryButton.width &&
+                mouseY >= this.retryButton.y && 
+                mouseY <= this.retryButton.y + this.retryButton.height) {
+                this.restartGame();
+                this.gameStarted = false;
+                this.showCharacterSelect = false;
+                return;
+            }
+        }
+
         // Original mouse down logic
         if (event.button === 0) {
             if (this.isChargingGrenade) {
@@ -1263,41 +1279,66 @@ class Game {
             this.ctx.strokeStyle = '#00FF00';
             this.ctx.stroke();
         } else {
-            // Draw stick figure
+            // Draw LeBron James stick figure
             this.ctx.rotate(0); // Reset rotation for stick figure
             this.ctx.strokeStyle = '#00FF00';
             this.ctx.lineWidth = 2;
             
+            // Taller and more muscular proportions
+            const headSize = 7;
+            const bodyLength = 25;
+            const armLength = 12;
+            const legLength = 20;
+            
             // Head
             this.ctx.beginPath();
-            this.ctx.arc(0, -15, 5, 0, Math.PI * 2);
+            this.ctx.arc(0, -bodyLength - headSize, headSize, 0, Math.PI * 2);
             this.ctx.stroke();
             
-            // Body
+            // Headband (LeBron's signature)
+            this.ctx.strokeStyle = '#FFFFFF';
+            this.ctx.lineWidth = 3;
             this.ctx.beginPath();
-            this.ctx.moveTo(0, -10);
-            this.ctx.lineTo(0, 10);
+            this.ctx.arc(0, -bodyLength - headSize, headSize + 1, -Math.PI * 0.8, Math.PI * 0.8);
             this.ctx.stroke();
             
-            // Arms
+            // Return to green color for body
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.lineWidth = 2;
+            
+            // Body (slightly wider for athletic build)
             this.ctx.beginPath();
-            // Rotate arms based on gun angle
-            const armLength = 8;
+            this.ctx.moveTo(0, -bodyLength);
+            this.ctx.lineTo(0, 0);
+            this.ctx.stroke();
+            
+            // Arms (more muscular)
+            this.ctx.beginPath();
             const rightArmX = Math.cos(this.player.gunAngle) * armLength;
             const rightArmY = Math.sin(this.player.gunAngle) * armLength;
             
-            this.ctx.moveTo(-8, 0); // Left arm
-            this.ctx.lineTo(0, 0);
-            this.ctx.lineTo(rightArmX, rightArmY); // Right arm follows gun angle
+            // Left arm (muscular curve)
+            this.ctx.moveTo(-3, -bodyLength + 8);
+            this.ctx.quadraticCurveTo(-12, -bodyLength + 15, -armLength, -5);
+            
+            // Right arm follows gun angle
+            this.ctx.moveTo(0, -bodyLength + 8);
+            this.ctx.lineTo(rightArmX, rightArmY);
             this.ctx.stroke();
             
-            // Legs
+            // Legs (longer and more athletic)
             this.ctx.beginPath();
-            this.ctx.moveTo(0, 10);
-            this.ctx.lineTo(-8, 20);
-            this.ctx.moveTo(0, 10);
-            this.ctx.lineTo(8, 20);
+            this.ctx.moveTo(0, 0);
+            this.ctx.quadraticCurveTo(-8, legLength/2, -10, legLength);
+            this.ctx.moveTo(0, 0);
+            this.ctx.quadraticCurveTo(8, legLength/2, 10, legLength);
             this.ctx.stroke();
+            
+            // Jersey number 23
+            this.ctx.fillStyle = '#00FF00';
+            this.ctx.font = 'bold 12px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText('23', 0, -bodyLength + 15);
             
             // Draw gun
             this.ctx.beginPath();
@@ -1389,6 +1430,28 @@ class Game {
     }
 
     drawUI() {
+        // Draw crosshair at cursor position
+        this.ctx.strokeStyle = '#00FF00';
+        this.ctx.lineWidth = 2;
+        const crosshairSize = 20;
+        
+        // Horizontal line
+        this.ctx.beginPath();
+        this.ctx.moveTo(this.cursor.x - crosshairSize, this.cursor.y);
+        this.ctx.lineTo(this.cursor.x + crosshairSize, this.cursor.y);
+        this.ctx.stroke();
+        
+        // Vertical line
+        this.ctx.beginPath();
+        this.ctx.moveTo(this.cursor.x, this.cursor.y - crosshairSize);
+        this.ctx.lineTo(this.cursor.x, this.cursor.y + crosshairSize);
+        this.ctx.stroke();
+        
+        // Small circle in the middle
+        this.ctx.beginPath();
+        this.ctx.arc(this.cursor.x, this.cursor.y, 2, 0, Math.PI * 2);
+        this.ctx.stroke();
+
         // Draw distance counter at top
         this.ctx.fillStyle = '#000';
         this.ctx.font = '20px Arial';
@@ -1523,6 +1586,16 @@ class Game {
             this.drawStartScreen();
             return;
         }
+
+        if (this.player.isDead) {
+            this.drawDeathScreen();
+            return;
+        }
+
+        if (this.gameState.gameWon) {
+            this.drawVictoryScreen();
+            return;
+        }
         
         // Apply camera zoom
         this.ctx.save();
@@ -1645,6 +1718,93 @@ class Game {
         }
     }
 
+    drawDeathScreen() {
+        // Dark overlay
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Game Over text
+        this.ctx.fillStyle = '#FF0000';
+        this.ctx.font = 'bold 72px Arial';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('GAME OVER', this.canvas.width / 2, this.canvas.height / 2 - 50);
+
+        // Stats
+        this.ctx.fillStyle = '#FFFFFF';
+        this.ctx.font = '24px Arial';
+        this.ctx.fillText(`Distance: ${this.gameState.distance}m`, this.canvas.width / 2, this.canvas.height / 2 + 20);
+        this.ctx.fillText(`Kills: ${this.gameState.killCount}`, this.canvas.width / 2, this.canvas.height / 2 + 50);
+
+        // Draw retry button
+        const buttonWidth = 200;
+        const buttonHeight = 50;
+        const buttonX = this.canvas.width / 2 - buttonWidth / 2;
+        const buttonY = this.canvas.height / 2 + 100;
+
+        // Button background
+        this.ctx.fillStyle = '#4CAF50';
+        this.ctx.fillRect(buttonX, buttonY, buttonWidth, buttonHeight);
+
+        // Button text
+        this.ctx.fillStyle = '#FFFFFF';
+        this.ctx.font = 'bold 24px Arial';
+        this.ctx.fillText('RETRY', this.canvas.width / 2, buttonY + buttonHeight / 2);
+
+        // Store button coordinates for click handling
+        this.retryButton = {
+            x: buttonX,
+            y: buttonY,
+            width: buttonWidth,
+            height: buttonHeight
+        };
+    }
+
+    drawVictoryScreen() {
+        // Victory overlay with gradient
+        const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+        gradient.addColorStop(0, 'rgba(0, 100, 0, 0.9)');
+        gradient.addColorStop(1, 'rgba(0, 50, 0, 0.9)');
+        this.ctx.fillStyle = gradient;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Victory text
+        this.ctx.fillStyle = '#FFD700';
+        this.ctx.font = 'bold 72px Arial';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('VICTORY!', this.canvas.width / 2, this.canvas.height / 2 - 50);
+
+        // Stats with golden color
+        this.ctx.fillStyle = '#FFD700';
+        this.ctx.font = '24px Arial';
+        this.ctx.fillText(`Final Distance: ${this.gameState.distance}m`, this.canvas.width / 2, this.canvas.height / 2 + 20);
+        this.ctx.fillText(`Total Kills: ${this.gameState.killCount}`, this.canvas.width / 2, this.canvas.height / 2 + 50);
+
+        // Draw play again button
+        const buttonWidth = 200;
+        const buttonHeight = 50;
+        const buttonX = this.canvas.width / 2 - buttonWidth / 2;
+        const buttonY = this.canvas.height / 2 + 100;
+
+        // Button background
+        this.ctx.fillStyle = '#4CAF50';
+        this.ctx.fillRect(buttonX, buttonY, buttonWidth, buttonHeight);
+
+        // Button text
+        this.ctx.fillStyle = '#FFFFFF';
+        this.ctx.font = 'bold 24px Arial';
+        this.ctx.fillText('PLAY AGAIN', this.canvas.width / 2, buttonY + buttonHeight / 2);
+
+        // Store button coordinates for click handling
+        this.retryButton = {
+            x: buttonX,
+            y: buttonY,
+            width: buttonWidth,
+            height: buttonHeight
+        };
+    }
+
     gameLoop() {
         if (this.gameStarted) {
             this.update();
@@ -1654,8 +1814,15 @@ class Game {
     }
 
     spawnEnemy() {
-        const screenRight = this.viewportX + this.canvas.width;
-        const x = screenRight + Math.random() * 500;
+        // Calculate spawn position relative to player
+        const spawnSide = Math.random() < 0.5 ? 'left' : 'right';
+        const spawnDistance = 500 + Math.random() * 300; // Spawn 500-800 pixels away
+        
+        // Calculate spawn position
+        const x = spawnSide === 'left' ? 
+            this.player.x - spawnDistance : 
+            this.player.x + spawnDistance;
+            
         const groundY = this.getGroundHeight(x);
         
         const enemy = {
@@ -1669,7 +1836,7 @@ class Game {
             deathTimer: 0,
             rotation: 0,
             speedY: 0,
-            speedX: -1 - Math.random(),
+            speedX: 0, // Initial speed will be set in updateEnemies
             movementTimer: 0,
             movementInterval: 120 + Math.random() * 60,
             canShoot: true,
@@ -1682,20 +1849,21 @@ class Game {
 
     updateEnemies() {
         this.enemies = this.enemies.filter(enemy => {
-            // Remove enemies that are too far behind
-            if (enemy.x < this.viewportX - 200) return false;
+            // Remove enemies that are too far behind or ahead
+            if (enemy.x < this.viewportX - 500 || enemy.x > this.viewportX + this.canvas.width + 500) return false;
 
-            // Update movement
-            enemy.movementTimer++;
-            if (enemy.movementTimer >= enemy.movementInterval) {
-                enemy.movementTimer = 0;
-                enemy.speedX = -1 - Math.random() * 2; // New random speed
-                if (Math.random() < 0.3) { // 30% chance to jump
-                    const groundHeight = this.getGroundHeight(enemy.x);
-                    if (Math.abs(enemy.y - (groundHeight - enemy.height)) < 5) {
-                        enemy.speedY = enemy.jumpForce;
-                    }
-                }
+            // Calculate direction to player
+            const dx = this.player.x - enemy.x;
+            const dy = this.player.y - enemy.y;
+            const distanceToPlayer = Math.sqrt(dx * dx + dy * dy);
+            
+            // Update movement - chase player
+            if (distanceToPlayer > 200) { // Keep some distance
+                // Move towards player
+                enemy.speedX = Math.sign(dx) * (1 + Math.random());
+            } else {
+                // Maintain distance and strafe
+                enemy.speedX = (Math.random() < 0.5 ? 1 : -1) * (1 + Math.random());
             }
 
             // Apply movement
@@ -1708,12 +1876,17 @@ class Game {
             if (enemy.y >= groundHeight - enemy.height) {
                 enemy.y = groundHeight - enemy.height;
                 enemy.speedY = 0;
+                
+                // Random jumping while chasing
+                if (Math.random() < 0.02) { // 2% chance to jump each frame
+                    enemy.speedY = enemy.jumpForce;
+                }
             }
 
-            // Shoot at player
+            // Update shooting behavior
             enemy.shootTimer++;
-            const shootInterval = this.gameState.level === 1 ? enemy.shootInterval : enemy.shootInterval * 0.5; // Shoot twice as fast in level 2
-            if (enemy.shootTimer >= shootInterval) {
+            const shootInterval = this.gameState.level === 1 ? enemy.shootInterval : enemy.shootInterval * 0.5;
+            if (enemy.shootTimer >= shootInterval && distanceToPlayer < 800) { // Only shoot when within range
                 enemy.shootTimer = 0;
                 this.enemyShoot(enemy);
             }
@@ -1725,7 +1898,6 @@ class Game {
                     this.player.ammo = Math.min(this.player.maxAmmo, this.player.ammo + ammoPickup);
                     this.audio.play('collect');
                 }
-                // Removed enemy death on collision - enemy stays alive
             }
 
             return true;
@@ -1746,12 +1918,13 @@ class Game {
         const dy = this.player.y - enemy.y;
         const angle = Math.atan2(dy, dx);
         
-        // Set 85% inaccuracy (15% accuracy) - increased from 65%
-        const maxInaccuracy = Math.PI * 0.85;
+        // Improved accuracy - now 75% inaccurate (25% accurate)
+        const maxInaccuracy = Math.PI * 0.75;
         const inaccuracy = (Math.random() - 0.5) * maxInaccuracy;
         const finalAngle = angle + inaccuracy;
 
-        if (Math.random() < 0.5) {
+        // Increased shooting chance
+        if (Math.random() < 0.7) { // 70% chance to shoot when timer allows
             this.enemyBullets.push({
                 x: enemy.x,
                 y: enemy.y,
