@@ -95,8 +95,17 @@ class Game {
         this.resizeCanvas();
         window.addEventListener('resize', this.resizeCanvas.bind(this));
         
+        // Add game state
+        this.gameStarted = false;
+        this.showCharacterSelect = false;
+        
         // Add sprite toggle state
         this.isSpaceship = true;
+        
+        // Camera zoom (smaller number = more zoomed out)
+        this.cameraZoom = 0.6;
+        
+        // Rest of constructor...
         
         // Create sprite toggle button
         this.createSpriteToggleButton();
@@ -117,10 +126,10 @@ class Game {
             maxHealth: 100,
             speedX: 0,
             speedY: 0,
-            maxSpeedX: 6,
-            acceleration: 0.3,
-            friction: 0.95,
-            gravity: 0.2,
+            maxSpeedX: 8,        // Increased max speed
+            acceleration: 8,    // Very high acceleration for instant speed
+            friction: 1,       // No friction for maintaining speed
+            gravity: 0.8,         // Kept the same for good ground control
             jumpForce: -45,
             canJump: true,
             doubleJump: false,
@@ -136,8 +145,8 @@ class Game {
             flyingAcceleration: 0.45,
             maxFlySpeed: 12,
             currentFlySpeed: 0,
-            maxAmmo: 200,     // Added maxAmmo property
-            ammo: 200,        // Increased starting ammo
+            maxAmmo: 200,
+            ammo: 200,
             isFullAuto: true,
             currentWeapon: 'rifle',
             isZoomed: false,
@@ -223,7 +232,7 @@ class Game {
         this.enemyBullets = [];
         this.spawnEnemyTimer = 0;
         this.enemySpawnInterval = 5; // Changed from 30 to 5 for much faster spawning (6x faster)
-        this.maxEnemies = 35; // Increased from 5 to 35 for more enemies at once
+        this.maxEnemies = 20;  // Changed from 35 to 20
         
         // Add blood particle properties
         this.bloodParticles = [];
@@ -449,17 +458,53 @@ class Game {
     }
 
     handleMouseDown(event) {
-        if (event.button === 0) { // Left click
+        if (!this.gameStarted) {
+            if (!this.showCharacterSelect) {
+                this.showCharacterSelect = true;
+                return;
+            }
+
+            // Handle character selection
+            const boxWidth = 200;
+            const boxHeight = 200;
+            const spacing = 100;
+            const centerX = this.canvas.width / 2;
+            const centerY = this.canvas.height / 2;
+
+            const mouseX = event.clientX - this.canvas.getBoundingClientRect().left;
+            const mouseY = event.clientY - this.canvas.getBoundingClientRect().top;
+
+            // Check if clicked on spaceship box
+            if (mouseX >= centerX - boxWidth - spacing/2 && 
+                mouseX <= centerX - spacing/2 &&
+                mouseY >= centerY - boxHeight/2 &&
+                mouseY <= centerY + boxHeight/2) {
+                this.isSpaceship = true;
+                this.gameStarted = true;
+            }
+            // Check if clicked on stick figure box
+            else if (mouseX >= centerX + spacing/2 &&
+                     mouseX <= centerX + boxWidth + spacing/2 &&
+                     mouseY >= centerY - boxHeight/2 &&
+                     mouseY <= centerY + boxHeight/2) {
+                this.isSpaceship = false;
+                this.gameStarted = true;
+            }
+            return;
+        }
+
+        // Original mouse down logic
+        if (event.button === 0) {
             if (this.isChargingGrenade) {
                 this.throwChargedGrenade();
             } else {
                 this.mouseDown = true;
-                if (!this.player.isFullAuto) { // Single shot in semi-auto
+                if (!this.player.isFullAuto) {
                     this.shoot();
                     this.mouseDown = false;
                 }
             }
-        } else if (event.button === 2 && this.player.currentWeapon === 'sniper') { // Right click for sniper zoom
+        } else if (event.button === 2 && this.player.currentWeapon === 'sniper') {
             this.player.isZoomed = !this.player.isZoomed;
         }
     }
@@ -833,22 +878,28 @@ class Game {
 
             // Cap speed at 45 for both directions
             const currentSpeed = Math.sqrt(this.player.speedX * this.player.speedX + this.player.speedY * this.player.speedY);
-            if (currentSpeed > 45) {
+            if (currentSpeed > 20) {  // Changed from 12 to 20 for faster spaceship speed
                 const angle = Math.atan2(this.player.speedY, this.player.speedX);
-                this.player.speedX = Math.cos(angle) * 45;
-                this.player.speedY = Math.sin(angle) * 45;
+                this.player.speedX = Math.cos(angle) * 20;  // Changed from 12 to 20
+                this.player.speedY = Math.sin(angle) * 20;  // Changed from 12 to 20
             }
         } else {
             // Stick figure movement - affected by gravity
             if (this.keys.d) {
-                this.player.speedX += this.player.currentWeapon === 'launchGun' ? this.player.acceleration * 2 : this.player.acceleration * 1.5;
+                this.player.speedX = this.player.maxSpeedX;  // Instant max speed right
             }
             if (this.keys.a) {
-                this.player.speedX -= this.player.currentWeapon === 'launchGun' ? this.player.acceleration * 2 : this.player.acceleration * 1.5;
+                this.player.speedX = -this.player.maxSpeedX;  // Instant max speed left
+            }
+            if (!this.keys.a && !this.keys.d) {
+                this.player.speedX = 0;  // Instant stop when no keys pressed
             }
             
             // Apply gravity
-            this.player.speedY += this.player.currentWeapon === 'launchGun' ? 0.3 : 0.6;
+            this.player.speedY += this.player.currentWeapon === 'launchGun' ? 0.3 : 0.4;
+            
+            // Cap horizontal speed - increased for stick figure
+            this.player.speedX = Math.min(Math.max(this.player.speedX, -6), 6); // Increased speed cap from 3 to 6
             
             // Get ground height for collision
             const groundHeight = this.getGroundHeight(this.player.x);
@@ -1472,6 +1523,19 @@ class Game {
         // Clear canvas
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         
+        if (!this.gameStarted) {
+            this.drawStartScreen();
+            return;
+        }
+        
+        // Apply camera zoom
+        this.ctx.save();
+        this.ctx.scale(this.cameraZoom, this.cameraZoom);
+        
+        // Adjust viewport for zoom
+        const zoomedWidth = this.canvas.width / this.cameraZoom;
+        const zoomedHeight = this.canvas.height / this.cameraZoom;
+        
         // Draw terrain
         this.drawMetallicTerrain();
         
@@ -1503,48 +1567,92 @@ class Game {
             this.ctx.fill();
         }
         
-        // Draw charging indicator when holding E
-        if (this.isChargingGrenade) {
-            this.ctx.strokeStyle = '#FF0000';
-            this.ctx.lineWidth = 3;
-            this.ctx.beginPath();
-            this.ctx.arc(this.cursor.x, this.cursor.y, 20, 0, Math.PI * 2);
-            this.ctx.stroke();
-        }
+        this.ctx.restore();
         
-        // Draw crosshair
-        this.ctx.strokeStyle = '#ffffff';
-        this.ctx.lineWidth = 2;
-        
-        // Outer circle
-        this.ctx.beginPath();
-        this.ctx.arc(this.cursor.x, this.cursor.y, 10, 0, Math.PI * 2);
-        this.ctx.stroke();
-        
-        // Inner dot
-        this.ctx.beginPath();
-        this.ctx.arc(this.cursor.x, this.cursor.y, 2, 0, Math.PI * 2);
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fill();
-        
-        // Crosshair lines
-        this.ctx.beginPath();
-        this.ctx.moveTo(this.cursor.x - 15, this.cursor.y);
-        this.ctx.lineTo(this.cursor.x - 5, this.cursor.y);
-        this.ctx.moveTo(this.cursor.x + 5, this.cursor.y);
-        this.ctx.lineTo(this.cursor.x + 15, this.cursor.y);
-        this.ctx.moveTo(this.cursor.x, this.cursor.y - 15);
-        this.ctx.lineTo(this.cursor.x, this.cursor.y - 5);
-        this.ctx.moveTo(this.cursor.x, this.cursor.y + 5);
-        this.ctx.lineTo(this.cursor.x, this.cursor.y + 15);
-        this.ctx.stroke();
-        
-        // Draw UI
+        // Draw UI elements without zoom
         this.drawUI();
     }
 
+    drawStartScreen() {
+        // Draw background
+        const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+        gradient.addColorStop(0, '#000033');
+        gradient.addColorStop(1, '#000066');
+        this.ctx.fillStyle = gradient;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        if (!this.showCharacterSelect) {
+            // Draw "Start Game" text
+            this.ctx.fillStyle = '#FFFFFF';
+            this.ctx.font = 'bold 48px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.fillText('Click to Start', this.canvas.width / 2, this.canvas.height / 2);
+        } else {
+            // Draw character selection screen
+            this.ctx.fillStyle = '#FFFFFF';
+            this.ctx.font = 'bold 48px Arial';
+            this.ctx.fillText('Choose Your Character', this.canvas.width / 2, this.canvas.height / 4);
+
+            // Draw selection boxes
+            const boxWidth = 200;
+            const boxHeight = 200;
+            const spacing = 100;
+            const centerX = this.canvas.width / 2;
+            const centerY = this.canvas.height / 2;
+
+            // Spaceship box
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.lineWidth = 3;
+            this.ctx.strokeRect(centerX - boxWidth - spacing/2, centerY - boxHeight/2, boxWidth, boxHeight);
+            this.ctx.font = 'bold 24px Arial';
+            this.ctx.fillText('Spaceship', centerX - boxWidth/2 - spacing/2, centerY + boxHeight/2 + 40);
+
+            // Draw spaceship preview
+            this.ctx.save();
+            this.ctx.translate(centerX - boxWidth/2 - spacing/2, centerY);
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.beginPath();
+            this.ctx.moveTo(25, 0);
+            this.ctx.lineTo(-15, -12);
+            this.ctx.lineTo(-10, 0);
+            this.ctx.lineTo(-15, 12);
+            this.ctx.lineTo(25, 0);
+            this.ctx.stroke();
+            this.ctx.restore();
+
+            // Stick figure box
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.strokeRect(centerX + spacing/2, centerY - boxHeight/2, boxWidth, boxHeight);
+            this.ctx.fillText('Stick Figure', centerX + boxWidth/2 + spacing/2, centerY + boxHeight/2 + 40);
+
+            // Draw stick figure preview
+            this.ctx.save();
+            this.ctx.translate(centerX + boxWidth/2 + spacing/2, centerY);
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.beginPath();
+            // Head
+            this.ctx.arc(0, -30, 10, 0, Math.PI * 2);
+            // Body
+            this.ctx.moveTo(0, -20);
+            this.ctx.lineTo(0, 20);
+            // Arms
+            this.ctx.moveTo(-15, 0);
+            this.ctx.lineTo(15, 0);
+            // Legs
+            this.ctx.moveTo(0, 20);
+            this.ctx.lineTo(-15, 45);
+            this.ctx.moveTo(0, 20);
+            this.ctx.lineTo(15, 45);
+            this.ctx.stroke();
+            this.ctx.restore();
+        }
+    }
+
     gameLoop() {
-        this.update();
+        if (this.gameStarted) {
+            this.update();
+        }
         this.draw();
         requestAnimationFrame(this.gameLoop.bind(this));
     }
@@ -1621,7 +1729,7 @@ class Game {
                     this.player.ammo = Math.min(this.player.maxAmmo, this.player.ammo + ammoPickup);
                     this.audio.play('collect');
                 }
-                return false;
+                // Removed enemy death on collision - enemy stays alive
             }
 
             return true;
