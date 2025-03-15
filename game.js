@@ -1,3 +1,55 @@
+class AudioManager {
+    constructor() {
+        this.sounds = {
+            shoot: new Audio('sounds/retro-laser-1-236669.mp3'),
+            explosion: new Audio('sounds/explosion.mp3'),
+            jump: new Audio('sounds/jump.mp3'),
+            fly: new Audio('sounds/fly.mp3'),
+            collect: new Audio('sounds/collect.mp3'),
+            death: new Audio('sounds/death.mp3'),
+            enemyDeath: new Audio('sounds/enemy_death.mp3'),
+            dash: new Audio('sounds/dash.mp3'),
+            nuke: new Audio('sounds/nuke.mp3'),
+            wallPlace: new Audio('sounds/wall_place.mp3'),
+            wallBreak: new Audio('sounds/wall_break.mp3'),
+            hit: new Audio('sounds/hit.mp3'),
+            reload: new Audio('sounds/reload.mp3'),
+            weaponSwitch: new Audio('sounds/weapon_switch.mp3')
+        };
+
+        // Set volume for all sounds
+        Object.values(this.sounds).forEach(sound => {
+            sound.volume = 0.3;
+        });
+
+        // Set specific volumes
+        this.sounds.explosion.volume = 0.4;
+        this.sounds.nuke.volume = 0.5;
+        this.sounds.shoot.volume = 0.15;
+        
+        // Remove gun sound loop
+        this.sounds.shoot.loop = false;
+        this.lastFlySound = 0;
+    }
+
+    play(soundName) {
+        const sound = this.sounds[soundName];
+        if (sound) {
+            // For fly sound, prevent too frequent playback
+            if (soundName === 'fly') {
+                const now = Date.now();
+                if (now - this.lastFlySound < 100) return; // Only play every 100ms
+                this.lastFlySound = now;
+            }
+            
+            // Create a new audio element for all sounds
+            const clone = sound.cloneNode();
+            clone.volume = sound.volume;
+            clone.play().catch(e => console.log("Audio play failed:", e));
+        }
+    }
+}
+
 class Game {
     constructor() {
         this.canvas = document.getElementById('gameCanvas');
@@ -17,33 +69,37 @@ class Game {
         this.player = {
             x: 100,
             y: initialGroundHeight - 40,
-            width: 20,
-            height: 40,
+            width: 40,  // Increased for ship
+            height: 24, // Adjusted for ship
             speedX: 0,
             speedY: 0,
-            maxSpeedX: 12,
-            acceleration: 0.8,
-            friction: 0.92,
-            gravity: 0.5,
-            jumpForce: -12,
+            maxSpeedX: 6,
+            acceleration: 0.3,
+            friction: 0.95, // Increased for smoother space movement
+            gravity: 0.2,   // Reduced for space-like feel
+            jumpForce: -45,
             canJump: true,
             doubleJump: false,
             isSliding: false,
             rotation: 0,
             gunAngle: 0,
             forcedSlide: false,
-            canFly: false,
-            flyingSpeed: -3.2,
-            descendSpeed: 3.0,
+            canFly: true,  // Always true for spaceship
+            flyingSpeed: -6,
+            descendSpeed: 3,
             isDead: false,
-            capeAnimation: 0, // For cape animation
-            flyingAcceleration: 0.4,
-            maxFlySpeed: 8,
+            capeAnimation: 0,
+            flyingAcceleration: 0.45,
+            maxFlySpeed: 12,
             currentFlySpeed: 0,
-            ammo: 20,
-            isFullAuto: true, // Add fire mode property
-            currentWeapon: 'rifle', // Default weapon
-            isZoomed: false
+            ammo: 100,     // More ammo for ship
+            isFullAuto: true,
+            currentWeapon: 'rifle',
+            isZoomed: false,
+            isDashing: false,
+            dashCooldown: 0,
+            dashDuration: 15,
+            dashSpeed: 90
         };
 
         // Add weapon properties
@@ -95,15 +151,6 @@ class Game {
         this.terrainDamage = new Map(); // Store terrain deformation
         this.generateTerrain();
         
-        // Diamond properties
-        this.diamond = {
-            x: 1000 + Math.random() * 2000,
-            y: this.canvas.height * 0.7,
-            width: 30,
-            height: 30,
-            collected: false
-        };
-        
         // Game state
         this.gameState = {
             distance: 0,
@@ -147,10 +194,16 @@ class Game {
         
         // Add wooden wall properties
         this.walls = [];
-        this.wallHealth = 5; // Number of hits to destroy
+        this.wallHealth = 5;
         this.wallWidth = 30;
         this.wallHeight = 60;
-        this.wallDistance = 50; // Distance in front of player
+        this.wallDistance = 50;
+        
+        // Add nuke properties
+        this.nukeReady = true;
+        this.nukeCooldown = 0;
+        this.nukeRadius = this.canvas.width;
+        this.nukeGroundHeight = this.canvas.height * 0.9;
         
         // Bind event listeners
         document.addEventListener('keydown', this.handleKeyDown.bind(this));
@@ -158,6 +211,9 @@ class Game {
         document.addEventListener('mousemove', this.handleMouseMove.bind(this));
         document.addEventListener('mousedown', this.handleMouseDown.bind(this));
         document.addEventListener('mouseup', this.handleMouseUp.bind(this));
+        
+        // Add audio manager
+        this.audio = new AudioManager();
         
         // Start the game loop
         this.gameLoop();
@@ -228,7 +284,12 @@ class Game {
 
     handleKeyDown(event) {
         switch(event.key.toLowerCase()) {
-            case 'w': this.keys.w = true; break;
+            case 'w': 
+                this.keys.w = true; 
+                if (this.player.canJump) {
+                    this.audio.play('jump');
+                }
+                break;
             case 'a': this.keys.a = true; break;
             case 's': this.keys.s = true; break;
             case 'd': this.keys.d = true; break;
@@ -236,24 +297,45 @@ class Game {
                 this.isChargingGrenade = true;
                 this.keys.e = true;
                 break;
-            case 'shift': // Add shift key handler
-                this.player.isFullAuto = !this.player.isFullAuto;
+            case 'shift': 
+                if (event.location === 2) {
+                    if (!this.player.isDashing && this.player.dashCooldown <= 0) {
+                        this.audio.play('dash');
+                        this.player.isDashing = true;
+                        this.player.dashCooldown = 60;
+                        const dashSpeed = 15;
+                        this.player.speedX = Math.cos(this.player.gunAngle) * dashSpeed;
+                        this.player.speedY = Math.sin(this.player.gunAngle) * dashSpeed;
+                    }
+                } else {
+                    this.player.isFullAuto = !this.player.isFullAuto;
+                }
                 break;
             case '1':
-                this.player.currentWeapon = 'rifle';
-                this.shootInterval = this.weapons.rifle.shootInterval;
-                this.player.isZoomed = false;
-                break;
             case '2':
-                this.player.currentWeapon = 'shotgun';
-                this.shootInterval = this.weapons.shotgun.shootInterval;
-                break;
             case '3':
-                this.player.currentWeapon = 'sniper';
-                this.shootInterval = this.weapons.sniper.shootInterval;
+                this.audio.play('weaponSwitch');
+                if (event.key === '1') {
+                    this.player.currentWeapon = 'rifle';
+                    this.shootInterval = this.weapons.rifle.shootInterval;
+                    this.player.isZoomed = false;
+                } else if (event.key === '2') {
+                    this.player.currentWeapon = 'shotgun';
+                    this.shootInterval = this.weapons.shotgun.shootInterval;
+                } else {
+                    this.player.currentWeapon = 'sniper';
+                    this.shootInterval = this.weapons.sniper.shootInterval;
+                }
                 break;
             case '4':
                 this.createWoodWall();
+                this.audio.play('wallPlace');
+                break;
+            case '5':
+                if (this.nukeReady) {
+                    this.dropNuke();
+                    this.audio.play('nuke');
+                }
                 break;
         }
     }
@@ -314,9 +396,8 @@ class Game {
         
         if (currentTime - this.lastShotTime >= this.shootInterval) {
             if (this.player.currentWeapon === 'shotgun') {
-                // Only shoot if we have enough ammo for all pellets
                 if (this.player.ammo >= weapon.pellets) {
-                    // Shotgun spread - uses one ammo per pellet
+                    this.audio.play('shoot');
                     for (let i = 0; i < weapon.pellets; i++) {
                         const spread = (Math.random() - 0.5) * weapon.spread;
                         const angle = this.player.gunAngle + spread;
@@ -327,13 +408,14 @@ class Game {
                             x: this.player.x + 25 * laserDx,
                             y: this.player.y + 25 * laserDy,
                             dx: laserDx * weapon.bulletSpeed,
-                            dy: laserDy * weapon.bulletSpeed
+                            dy: laserDy * weapon.bulletSpeed,
+                            color: '#ff0000'  // Added color for lasers
                         });
-                        this.player.ammo--; // Decrease ammo for each pellet
+                        this.player.ammo--;
                     }
                 }
             } else if (this.player.ammo > 0) {
-                // Rifle or Sniper
+                this.audio.play('shoot');
                 const laserDx = Math.cos(this.player.gunAngle);
                 const laserDy = Math.sin(this.player.gunAngle);
                 
@@ -341,7 +423,8 @@ class Game {
                     x: this.player.x + 25 * laserDx,
                     y: this.player.y + 25 * laserDy,
                     dx: laserDx * weapon.bulletSpeed,
-                    dy: laserDy * weapon.bulletSpeed
+                    dy: laserDy * weapon.bulletSpeed,
+                    color: '#ff0000'  // Added color for lasers
                 });
                 this.player.ammo--;
             }
@@ -420,37 +503,6 @@ class Game {
         }
     }
 
-    checkDiamondCollection() {
-        if (!this.diamond.collected) {
-            const dx = this.player.x - this.diamond.x;
-            const dy = this.player.y - this.diamond.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (distance < 40) {
-                this.diamond.collected = true;
-                this.player.canFly = true;
-                // Create special collection effect
-                this.createDiamondCollectionEffect();
-            }
-        }
-    }
-
-    createDiamondCollectionEffect() {
-        for (let i = 0; i < 40; i++) {
-            const angle = (Math.PI * 2 * i) / 40;
-            const speed = 4 + Math.random() * 4;
-            this.particles.push({
-                x: this.diamond.x,
-                y: this.diamond.y,
-                dx: Math.cos(angle) * speed,
-                dy: Math.sin(angle) * speed - 2,
-                life: 60,
-                color: '#00FFFF',
-                size: 3 + Math.random() * 3
-            });
-        }
-    }
-
     updateParticles() {
         this.particles = this.particles.filter(particle => {
             particle.x += particle.dx;
@@ -474,6 +526,7 @@ class Game {
         }
 
         if (this.player.isDead) {
+            this.audio.play('death');
             this.restartGame();
             return;
         }
@@ -527,6 +580,7 @@ class Game {
                     wall.health--;
                     if (wall.health <= 0) {
                         this.walls.splice(i, 1);
+                        this.audio.play('wallBreak');
                     }
                     return false;
                 }
@@ -554,6 +608,7 @@ class Game {
                     this.deadEnemies.push(enemy);
                     this.enemies.splice(i, 1);
                     this.createBloodEffect(enemy.x, enemy.y);
+                    this.audio.play('enemyDeath');
                     return false;
                 }
             }
@@ -575,112 +630,77 @@ class Game {
         // Update particles
         this.updateParticles();
 
-        // Check for diamond collection
-        this.checkDiamondCollection();
-
-        // Update grenades
-        this.grenades = this.grenades.filter(grenade => {
-            if (!grenade.exploded) {
-                grenade.x += grenade.speedX;
-                grenade.y += grenade.speedY;
-                grenade.speedY += 0.4; // Gravity
-
-                const groundHeight = this.getGroundHeight(grenade.x);
-                if (grenade.y >= groundHeight) {
-                    this.createGrenadeExplosion(grenade.x, grenade.y, grenade.isCharged);
-                    grenade.exploded = true;
-                }
-            }
-            return !grenade.exploded;
-        });
-
-        // Handle movement with improved smoothness
+        // Handle movement with improved space-like physics
         if (this.keys.d) {
             this.player.speedX += this.player.acceleration;
         }
         if (this.keys.a) {
             this.player.speedX -= this.player.acceleration;
         }
-        
-        // Handle jumping with W key when on ground
-        if (this.keys.w && this.player.canJump && !this.player.canFly) {
-            this.player.speedY = this.player.jumpForce;
-            this.player.canJump = false;
+        if (this.keys.w) {
+            this.player.speedY -= this.player.acceleration;
+        }
+        if (this.keys.s) {
+            this.player.speedY += this.player.acceleration;
         }
         
-        // Handle flying with improved smoothness and screen bounds
-        if (this.player.canFly) {
-            if (this.keys.w) {
-                // Don't allow flying above the screen
-                if (this.player.y > 20) {
-                    this.player.currentFlySpeed = Math.max(
-                        this.player.currentFlySpeed - this.player.flyingAcceleration,
-                        -this.player.maxFlySpeed
-                    );
-                } else {
-                    this.player.currentFlySpeed = 0;
-                    this.player.y = 20;
-                }
-            } else if (this.keys.s) {
-                // Fast descent
-                this.player.currentFlySpeed = this.player.descendSpeed;
+        // Apply friction to both X and Y movement
+        this.player.speedX *= this.player.friction;
+        this.player.speedY *= this.player.friction;
+
+        // Cap speed at 45 for both directions
+        const currentSpeed = Math.sqrt(this.player.speedX * this.player.speedX + this.player.speedY * this.player.speedY);
+        if (currentSpeed > 45) {
+            const angle = Math.atan2(this.player.speedY, this.player.speedX);
+            this.player.speedX = Math.cos(angle) * 45;
+            this.player.speedY = Math.sin(angle) * 45;
+        }
+
+        // Update player position
+        const newX = this.player.x + this.player.speedX;
+        const newY = this.player.y + this.player.speedY;
+        
+        // Create temporary player object with new position
+        const tempPlayer = {
+            x: newX,
+            y: newY,
+            width: this.player.width,
+            height: this.player.height
+        };
+        
+        // Only update position if not colliding with walls
+        if (!this.checkWallCollisions(tempPlayer)) {
+            this.player.x = newX;
+            this.player.y = newY;
+        }
+
+        // Keep player within screen bounds
+        this.player.y = Math.max(20, Math.min(this.canvas.height - 20, this.player.y));
+        
+        // Update gun angle to match ship rotation
+        const dx = this.cursor.x - (this.player.x - this.viewportX);
+        const dy = this.cursor.y - this.player.y;
+        this.player.gunAngle = Math.atan2(dy, dx);
+
+        // Update enemies with wall collisions
+        this.enemies = this.enemies.filter(enemy => {
+            const newX = enemy.x + enemy.speedX;
+            const tempEnemy = {
+                x: newX,
+                y: enemy.y,
+                width: enemy.width,
+                height: enemy.height
+            };
+            
+            if (!this.checkWallCollisions(tempEnemy)) {
+                enemy.x = newX;
             } else {
-                // Gentle deceleration
-                this.player.currentFlySpeed = Math.min(
-                    this.player.currentFlySpeed + this.player.flyingAcceleration * 0.5,
-                    2
-                );
+                enemy.speedX *= -1; // Reverse direction if hitting wall
             }
-            this.player.speedY = this.player.currentFlySpeed;
-        }
-        
-        // Get terrain info
-        const terrainAngle = this.getTerrainAngle(this.player.x);
-        const isDownhill = terrainAngle > 0.1;
-        
-        // Handle sliding with improved physics
-        if (this.keys.s && isDownhill && !this.player.canFly) {
-            this.player.forcedSlide = true;
-            // Enhanced downhill acceleration
-            this.player.speedX += Math.sin(terrainAngle) * 1.2;
-        } else {
-            this.player.forcedSlide = false;
-        }
-        
-        // Apply friction based on slope and sliding state
-        let currentFriction = this.player.friction;
-        if (isDownhill && (this.player.forcedSlide || this.player.isSliding)) {
-            currentFriction = 0.995; // Even less friction when sliding downhill
-        }
-        this.player.speedX *= currentFriction;
-        
-        // Limit horizontal speed
-        const currentMaxSpeed = isDownhill ? this.player.maxSpeedX * 1.5 : this.player.maxSpeedX;
-        this.player.speedX = Math.max(-currentMaxSpeed, Math.min(currentMaxSpeed, this.player.speedX));
-        
-        // Move player
-        this.player.x += this.player.speedX;
-        this.player.y += this.player.speedY;
-        
-        // Get ground height and angle at player position
-        const groundHeight = this.getGroundHeight(this.player.x);
-        
-        // Check if on slope
-        const onSlope = Math.abs(terrainAngle) > 0.2;
-        this.player.isSliding = onSlope && Math.abs(terrainAngle) > 0.5;
-        
-        // Modified gravity application
-        if (!this.player.canFly || !this.keys.w) {
-            if (this.player.y < groundHeight - this.player.height) {
-                this.player.speedY += this.player.gravity;
-                this.player.canJump = false;
-            } else {
-                this.player.y = groundHeight - this.player.height;
-                this.player.speedY = 0;
-                this.player.canJump = true;
-                this.player.doubleJump = false;
-            }
-        }
+            
+            // ... rest of enemy update code ...
+            return true;
+        });
         
         // Update viewport to follow player
         if (this.player.x > this.canvas.width * 0.4) {
@@ -694,7 +714,7 @@ class Game {
         }
         
         // Update player rotation based on terrain
-        this.player.rotation = this.player.isSliding ? terrainAngle : 0;
+        this.player.rotation = this.player.isSliding ? this.getTerrainAngle(this.player.x) : 0;
 
         // Update cape animation when flying
         if (this.player.canFly) {
@@ -718,6 +738,50 @@ class Game {
 
             return enemy.deathTimer < 150; // Remove after animation
         });
+
+        // Handle dashing
+        if (this.player.isDashing) {
+            // Use gun angle for dash direction
+            const dashX = Math.cos(this.player.gunAngle) * this.player.dashSpeed;
+            const dashY = Math.sin(this.player.gunAngle) * this.player.dashSpeed;
+            
+            // Apply dash movement
+            const newX = this.player.x + dashX;
+            const newY = this.player.y + dashY;
+            
+            // Check for wall collisions before applying dash
+            const tempPlayer = {
+                x: newX,
+                y: newY,
+                width: this.player.width,
+                height: this.player.height
+            };
+            
+            if (!this.checkWallCollisions(tempPlayer)) {
+                this.player.x = newX;
+                this.player.y = newY;
+            }
+            
+            // Decrease dash duration
+            this.player.dashDuration--;
+            if (this.player.dashDuration <= 0) {
+                this.player.isDashing = false;
+                this.player.dashDuration = 15; // Reset dash duration
+            }
+        }
+        
+        // Update dash cooldown
+        if (this.player.dashCooldown > 0) {
+            this.player.dashCooldown--;
+        }
+
+        // Update nuke cooldown
+        if (!this.nukeReady) {
+            this.nukeCooldown--;
+            if (this.nukeCooldown <= 0) {
+                this.nukeReady = true;
+            }
+        }
     }
 
     drawParticles() {
@@ -774,48 +838,16 @@ class Game {
     }
 
     drawLasers() {
-        this.ctx.strokeStyle = '#ff0000';
-        this.ctx.lineWidth = 2;
+        this.ctx.lineWidth = 3;
         
         for (const laser of this.lasers) {
             const screenX = laser.x - this.viewportX;
             
+            this.ctx.strokeStyle = laser.color || '#ff0000';
             this.ctx.beginPath();
             this.ctx.moveTo(screenX, laser.y);
-            this.ctx.lineTo(screenX - laser.dx, laser.y - laser.dy);
+            this.ctx.lineTo(screenX - laser.dx * 2, laser.y - laser.dy * 2);
             this.ctx.stroke();
-        }
-    }
-
-    drawDiamond() {
-        if (!this.diamond.collected) {
-            const screenX = this.diamond.x - this.viewportX;
-            
-            // Draw diamond shape
-            this.ctx.save();
-            this.ctx.translate(screenX, this.diamond.y);
-            
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, -15);
-            this.ctx.lineTo(15, 0);
-            this.ctx.lineTo(0, 15);
-            this.ctx.lineTo(-15, 0);
-            this.ctx.closePath();
-            
-            // Create shimmering effect
-            const gradient = this.ctx.createLinearGradient(-15, -15, 15, 15);
-            gradient.addColorStop(0, '#00FFFF');
-            gradient.addColorStop(0.5, '#FFFFFF');
-            gradient.addColorStop(1, '#00FFFF');
-            
-            this.ctx.fillStyle = gradient;
-            this.ctx.fill();
-            
-            this.ctx.strokeStyle = '#FFFFFF';
-            this.ctx.lineWidth = 2;
-            this.ctx.stroke();
-            
-            this.ctx.restore();
         }
     }
 
@@ -824,91 +856,44 @@ class Game {
         
         this.ctx.save();
         this.ctx.translate(screenX + this.player.width/2, this.player.y + this.player.height/2);
-        this.ctx.rotate(this.player.rotation);
+        this.ctx.rotate(this.player.gunAngle);
         
-        // Draw stick figure
-        this.ctx.strokeStyle = '#000';
-        this.ctx.lineWidth = 2;
+        // Draw spaceship
+        this.ctx.strokeStyle = '#4488ff';
+        this.ctx.lineWidth = 3;
         
-        if (this.player.canFly && this.keys.w) {
-            // Superman pose
-            // Draw cape
+        // Ship body
+        this.ctx.beginPath();
+        this.ctx.moveTo(25, 0); // Nose
+        this.ctx.lineTo(-15, -12); // Top wing
+        this.ctx.lineTo(-10, 0); // Back middle
+        this.ctx.lineTo(-15, 12); // Bottom wing
+        this.ctx.lineTo(25, 0); // Back to nose
+        this.ctx.stroke();
+        
+        // Engine flames
+        if (this.keys.w || this.keys.a || this.keys.d) {
             this.ctx.beginPath();
-            const capeWave = Math.sin(this.player.capeAnimation) * 5;
-            this.ctx.moveTo(-5, -15);
-            this.ctx.quadraticCurveTo(
-                -15, -5 + capeWave,
-                -25, 10 + capeWave
-            );
-            this.ctx.strokeStyle = '#ff0000';
-            this.ctx.stroke();
-            
-            // Horizontal body for flying
-            this.ctx.strokeStyle = '#000';
-            this.ctx.beginPath();
-            this.ctx.moveTo(-10, 0);
-            this.ctx.lineTo(10, 0);
-            this.ctx.stroke();
-            
-            // Forward-pointing arms
-            this.ctx.beginPath();
-            this.ctx.moveTo(10, 0);
-            this.ctx.lineTo(20, -5);
-            this.ctx.moveTo(10, 0);
-            this.ctx.lineTo(20, 5);
-            this.ctx.stroke();
-            
-            // Head
-            this.ctx.beginPath();
-            this.ctx.arc(-5, 0, 5, 0, Math.PI * 2);
-            this.ctx.stroke();
-            
-            // Straight legs
-            this.ctx.beginPath();
-            this.ctx.moveTo(-10, 0);
-            this.ctx.lineTo(-20, -5);
-            this.ctx.moveTo(-10, 0);
-            this.ctx.lineTo(-20, 5);
-            this.ctx.stroke();
-        } else {
-            // Normal stick figure drawing (existing code)
-            // Body
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, -15);
-            this.ctx.lineTo(0, 10);
-            this.ctx.stroke();
-            
-            // Head
-            this.ctx.beginPath();
-            this.ctx.arc(0, -20, 5, 0, Math.PI * 2);
-            this.ctx.stroke();
-            
-            // Arms and gun
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, -5);
-            this.ctx.lineTo(-8, 5);
-            this.ctx.moveTo(0, -5);
-            
-            // Gun arm follows mouse
-            this.ctx.save();
-            this.ctx.rotate(this.player.gunAngle);
-            this.ctx.lineTo(15, 0);
-            this.ctx.lineTo(25, 0);
-            this.ctx.moveTo(15, -2);
-            this.ctx.lineTo(15, 2);
-            this.ctx.stroke();
-            this.ctx.restore();
-            
-            // Legs
-            this.ctx.beginPath();
-            this.ctx.moveTo(0, 10);
-            this.ctx.lineTo(-8, 20);
-            this.ctx.moveTo(0, 10);
-            this.ctx.lineTo(8, 20);
+            const flameLength = 15 + Math.random() * 10;
+            this.ctx.moveTo(-10, -2);
+            this.ctx.lineTo(-10 - flameLength, 0);
+            this.ctx.lineTo(-10, 2);
+            this.ctx.strokeStyle = '#ff4400';
             this.ctx.stroke();
         }
         
+        // Cockpit
+        this.ctx.beginPath();
+        this.ctx.arc(5, 0, 5, 0, Math.PI * 2);
+        this.ctx.strokeStyle = '#88ccff';
+        this.ctx.stroke();
+        
         this.ctx.restore();
+        
+        // Always play engine sound when moving
+        if (this.keys.w || this.keys.a || this.keys.d) {
+            this.audio.play('fly');
+        }
     }
 
     drawEnemies() {
@@ -1029,6 +1014,21 @@ class Game {
             
             this.ctx.restore();
         }
+
+        // Draw nuke cooldown
+        if (!this.nukeReady) {
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            this.ctx.fillRect(10, this.canvas.height - 120, 150, 30);
+            this.ctx.fillStyle = '#ff0000';
+            this.ctx.font = '16px Arial';
+            this.ctx.fillText(`NUKE: ${Math.ceil(this.nukeCooldown / 60)}s`, 20, this.canvas.height - 100);
+        } else {
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            this.ctx.fillRect(10, this.canvas.height - 120, 150, 30);
+            this.ctx.fillStyle = '#00ff00';
+            this.ctx.font = '16px Arial';
+            this.ctx.fillText('NUKE: READY', 20, this.canvas.height - 100);
+        }
     }
 
     drawWalls() {
@@ -1037,26 +1037,15 @@ class Game {
             
             this.ctx.save();
             this.ctx.translate(screenX, wall.y);
-            this.ctx.rotate(wall.rotation);
             
-            // Draw wooden texture
+            // Draw wall with solid color
             this.ctx.fillStyle = '#8B4513';
-            this.ctx.fillRect(-wall.width/2, -wall.height/2, wall.width, wall.height);
+            this.ctx.fillRect(-wall.width/2, 0, wall.width, wall.height);
             
-            // Draw wood grain lines
-            this.ctx.strokeStyle = '#654321';
-            this.ctx.lineWidth = 1;
-            for (let i = 0; i < 5; i++) {
-                this.ctx.beginPath();
-                this.ctx.moveTo(-wall.width/2, -wall.height/2 + i * wall.height/5);
-                this.ctx.lineTo(wall.width/2, -wall.height/2 + i * wall.height/5);
-                this.ctx.stroke();
-            }
-            
-            // Draw health indicator
+            // Draw health bar
             const healthPercentage = wall.health / this.wallHealth;
             this.ctx.fillStyle = `rgba(0, 255, 0, ${healthPercentage})`;
-            this.ctx.fillRect(-wall.width/2, -wall.height/2 - 5, wall.width * healthPercentage, 3);
+            this.ctx.fillRect(-wall.width/2, -5, wall.width * healthPercentage, 3);
             
             this.ctx.restore();
         }
@@ -1068,9 +1057,6 @@ class Game {
         
         // Draw terrain
         this.drawMetallicTerrain();
-        
-        // Draw diamond
-        this.drawDiamond();
         
         // Draw particles
         this.drawParticles();
@@ -1296,15 +1282,15 @@ class Game {
         this.particles = [];
         this.grenades = [];
 
-        // Reset diamond
-        this.diamond.collected = false;
-        this.diamond.x = 1000 + Math.random() * 2000;
-
         // Reset terrain
         this.terrainDamage.clear();
         this.generateTerrain();
 
         this.player.ammo = 20; // Reset ammo on death
+
+        // Reset nuke properties
+        this.nukeReady = true;
+        this.nukeCooldown = 0;
     }
 
     createBloodEffect(x, y) {
@@ -1405,6 +1391,7 @@ class Game {
     }
 
     createGrenadeExplosion(x, y, isCharged = false) {
+        this.audio.play('explosion');
         // Create explosion particles
         const particleCount = isCharged ? 100 : 25; // Reduced from 200/50
         for (let i = 0; i < particleCount; i++) {
@@ -1455,12 +1442,89 @@ class Game {
         
         this.walls.push({
             x: wallX,
-            y: wallY,
+            y: wallY - this.wallHeight/2, // Adjust Y to account for wall height
             width: this.wallWidth,
             height: this.wallHeight,
             health: this.wallHealth,
-            rotation: this.player.gunAngle
+            rotation: Math.PI/2 // Fixed 90-degree rotation
         });
+    }
+
+    checkWallCollisions(entity) {
+        for (const wall of this.walls) {
+            const entityCenterX = entity.x + entity.width/2;
+            const entityCenterY = entity.y + entity.height/2;
+            
+            // Check if entity is within wall bounds
+            if (entityCenterX > wall.x - wall.width/2 &&
+                entityCenterX < wall.x + wall.width/2 &&
+                entityCenterY > wall.y &&
+                entityCenterY < wall.y + wall.height) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Add new method for nuke
+    dropNuke() {
+        this.audio.play('nuke');
+        // Create massive explosion effect
+        const centerX = this.player.x;
+        const centerY = this.player.y;
+        
+        // Create explosion particles
+        for (let i = 0; i < 200; i++) {
+            const angle = (Math.PI * 2 * i) / 200;
+            const speed = 10 + Math.random() * 15;
+            const size = 5 + Math.random() * 10;
+            this.particles.push({
+                x: centerX,
+                y: centerY,
+                dx: Math.cos(angle) * speed,
+                dy: Math.sin(angle) * speed - 5,
+                life: 120,
+                color: ['#FF0000', '#FF4400', '#FF8800', '#FFAA00'][Math.floor(Math.random() * 4)],
+                size: size
+            });
+        }
+        
+        // Flatten terrain in view
+        const viewStart = Math.max(0, Math.floor((this.viewportX - this.canvas.width) / (this.worldWidth / this.terrain.length)));
+        const viewEnd = Math.min(this.terrain.length, Math.ceil((this.viewportX + this.canvas.width * 2) / (this.worldWidth / this.terrain.length)));
+        
+        // Flatten the terrain
+        for (let i = viewStart; i < viewEnd; i++) {
+            // Set all terrain to a constant height, leaving a thin layer at the bottom
+            this.terrain[i].y = this.canvas.height * 0.9; // Move 90% down the screen
+            // Update the terrain damage map
+            this.terrainDamage.set(Math.floor(this.terrain[i].x), this.terrain[i].y);
+        }
+        
+        // Kill all enemies in view
+        this.enemies.forEach(enemy => {
+            if (enemy.x >= this.viewportX - this.canvas.width && 
+                enemy.x <= this.viewportX + this.canvas.width * 2) {
+                enemy.isDying = true;
+                enemy.deathTimer = 0;
+                enemy.speedY = -10;
+                enemy.color = '#000000';
+                enemy.canShoot = false;
+                this.deadEnemies.push(enemy);
+                this.createBloodEffect(enemy.x, enemy.y);
+            }
+        });
+        this.enemies = this.enemies.filter(enemy => !enemy.isDying);
+        
+        // Clear all walls in view
+        this.walls = this.walls.filter(wall => 
+            wall.x < this.viewportX - this.canvas.width || 
+            wall.x > this.viewportX + this.canvas.width * 2
+        );
+        
+        // Set cooldown
+        this.nukeReady = false;
+        this.nukeCooldown = 30 * 60; // 30 seconds at 60 FPS
     }
 }
 
