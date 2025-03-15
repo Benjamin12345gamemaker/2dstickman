@@ -157,7 +157,10 @@ class Game {
         // Laser properties
         this.lasers = [];
         this.laserSpeed = 15;
-        this.laserPower = 20; // How much terrain is destroyed
+        this.laserPower = 20;
+        this.laserWidth = 6; // Added laser width property
+        this.specialLaser = null; // Added for special laser beam
+        this.specialLaserDuration = 0; // Duration counter for special laser
 
         // Terrain properties
         this.terrain = [];
@@ -168,7 +171,11 @@ class Game {
         this.gameState = {
             distance: 0,
             winDistance: 15000,
-            gameWon: false
+            gameWon: false,
+            killCount: 0,
+            requiredKills: 100,
+            level: 1,
+            maxEnemies: 5
         };
 
         // Enemy properties
@@ -176,8 +183,8 @@ class Game {
         this.deadEnemies = []; // Store dying enemies for animation
         this.enemyBullets = [];
         this.spawnEnemyTimer = 0;
-        this.enemySpawnInterval = 120; // Spawn enemy every 120 frames
-        this.maxEnemies = 5; // Maximum number of enemies at once
+        this.enemySpawnInterval = 30; // Changed from 120 to 30 for much faster spawning
+        this.maxEnemies = this.gameState.maxEnemies; // Maximum number of enemies at once
         
         // Add blood particle properties
         this.bloodParticles = [];
@@ -230,6 +237,10 @@ class Game {
         
         // Start the game loop
         this.gameLoop();
+        
+        // Add special laser cooldown properties
+        this.specialLaserCooldown = 0;
+        this.specialLaserMaxCooldown = 10 * 60; // 10 seconds cooldown at 60fps
     }
 
     resizeCanvas() {
@@ -352,6 +363,11 @@ class Game {
                 if (this.nukeReady) {
                     this.dropNuke();
                     this.audio.play('nuke');
+                }
+                break;
+            case ' ': // Space bar
+                if (!this.specialLaser && this.specialLaserDuration <= 0 && this.specialLaserCooldown <= 0) {
+                    this.createSpecialLaser();
                 }
                 break;
         }
@@ -656,11 +672,12 @@ class Game {
                     enemy.speedY = -5;
                     enemy.color = '#000000';
                     enemy.canShoot = false;
-                    this.player.ammo += enemy.ammo; // Add enemy's ammo to player
+                    this.player.ammo += enemy.ammo;
                     this.deadEnemies.push(enemy);
                     this.enemies.splice(i, 1);
                     this.createBloodEffect(enemy.x, enemy.y);
                     this.audio.play('enemyDeath');
+                    this.gameState.killCount++;
                     return false;
                 }
             }
@@ -710,6 +727,40 @@ class Game {
             return true;
         });
 
+        // Update special laser cooldown
+        if (this.specialLaserCooldown > 0) {
+            this.specialLaserCooldown--;
+        }
+
+        // Update special laser
+        if (this.specialLaser) {
+            this.specialLaserDuration--;
+            if (this.specialLaserDuration <= 0) {
+                this.specialLaser = null;
+                this.specialLaserCooldown = this.specialLaserMaxCooldown; // Start cooldown when laser expires
+            } else {
+                // Update laser position and angle to follow player and mouse
+                this.specialLaser.x = this.player.x;
+                this.specialLaser.y = this.player.y;
+                this.specialLaser.angle = this.player.gunAngle;
+
+                // Check for enemy collisions with special laser
+                this.enemies = this.enemies.filter(enemy => {
+                    const dx = enemy.x - this.specialLaser.x;
+                    const dy = enemy.y - this.specialLaser.y;
+                    const angle = Math.atan2(dy, dx);
+                    const angleDiff = Math.abs(angle - this.specialLaser.angle);
+                    if (angleDiff < 0.1 && Math.sqrt(dx * dx + dy * dy) < 2000) {
+                        this.createBloodEffect(enemy.x, enemy.y);
+                        this.audio.play('enemyDeath');
+                        this.gameState.killCount++;
+                        return false;
+                    }
+                    return true;
+                });
+            }
+        }
+
         // Handle movement with improved space-like physics
         if (this.isSpaceship) {
             // Spaceship movement - can fly freely
@@ -746,34 +797,33 @@ class Game {
                 this.player.speedX -= this.player.currentWeapon === 'launchGun' ? this.player.acceleration * 2 : this.player.acceleration * 1.5;
             }
             
-            // Apply gravity (slightly increased, and still reduced for launch gun)
+            // Apply gravity
             this.player.speedY += this.player.currentWeapon === 'launchGun' ? 0.3 : 0.6;
             
-            // Cap falling speed
-            if (this.player.speedY > 20) {
-                this.player.speedY = 20;
-            }
-            
-            // Cap horizontal speed (higher for launch gun)
-            const maxSpeed = this.player.currentWeapon === 'launchGun' ? 45 : 35;
-            this.player.speedX = Math.min(maxSpeed, Math.max(-maxSpeed, this.player.speedX));
-            
-            // Get ground height once for multiple uses
+            // Get ground height for collision
             const groundHeight = this.getGroundHeight(this.player.x);
             
-            // Apply horizontal friction based on whether in air and using launch gun
-            const isInAir = this.player.y < groundHeight - this.player.height;
-            if (this.player.currentWeapon === 'launchGun' && isInAir) {
-                this.player.speedX *= 0.99; // Low friction only in air with launch gun
-            } else {
-                this.player.speedX *= 0.9; // Normal friction otherwise
-            }
-            
-            // Check if on ground
-            if (this.player.y >= groundHeight - this.player.height) {
+            // Check ground collision with proper hitbox
+            if (this.player.y + this.player.height >= groundHeight) {
                 this.player.y = groundHeight - this.player.height;
                 this.player.speedY = 0;
                 this.player.canJump = true;
+            }
+            
+            // Apply horizontal movement only if not colliding with ground
+            const newX = this.player.x + this.player.speedX;
+            const newGroundHeight = this.getGroundHeight(newX);
+            if (this.player.y + this.player.height < newGroundHeight) {
+                this.player.x = newX;
+            } else {
+                // If would collide with ground, check if can slide up slope
+                const slope = (newGroundHeight - groundHeight) / Math.abs(this.player.speedX);
+                if (Math.abs(slope) < 1.0) { // Maximum slope that can be climbed
+                    this.player.x = newX;
+                    this.player.y = newGroundHeight - this.player.height;
+                } else {
+                    this.player.speedX = 0; // Stop horizontal movement if slope too steep
+                }
             }
             
             // Handle jumping (only when on ground)
@@ -911,6 +961,13 @@ class Game {
                 this.nukeReady = true;
             }
         }
+
+        // Check if level is complete
+        if (this.gameState.killCount >= this.gameState.requiredKills && this.gameState.level === 1) {
+            this.startLevel2();
+        } else if (this.gameState.killCount >= this.gameState.requiredKills * 2 && this.gameState.level === 2) {
+            this.gameState.gameWon = true;
+        }
     }
 
     drawParticles() {
@@ -1040,15 +1097,33 @@ class Game {
     }
 
     drawLasers() {
-        this.ctx.lineWidth = 3;
+        this.ctx.lineWidth = this.laserWidth;
         
+        // Draw regular lasers
         for (const laser of this.lasers) {
             const screenX = laser.x - this.viewportX;
             
             this.ctx.strokeStyle = laser.color || '#ff0000';
             this.ctx.beginPath();
             this.ctx.moveTo(screenX, laser.y);
-            this.ctx.lineTo(screenX - laser.dx * 2, laser.y - laser.dy * 2);
+            this.ctx.lineTo(screenX - laser.dx, laser.y - laser.dy);
+            this.ctx.stroke();
+        }
+        
+        // Draw special laser if active
+        if (this.specialLaser) {
+            const screenX = this.specialLaser.x - this.viewportX;
+            this.ctx.strokeStyle = '#00FFFF';
+            this.ctx.lineWidth = 8;
+            this.ctx.beginPath();
+            this.ctx.moveTo(screenX, this.specialLaser.y);
+            this.ctx.lineTo(screenX + Math.cos(this.specialLaser.angle) * 2000, 
+                          this.specialLaser.y + Math.sin(this.specialLaser.angle) * 2000);
+            this.ctx.stroke();
+            
+            // Add glow effect
+            this.ctx.strokeStyle = '#00FFFF44';
+            this.ctx.lineWidth = 16;
             this.ctx.stroke();
         }
     }
@@ -1212,7 +1287,7 @@ class Game {
         this.ctx.fillStyle = '#ff0000';
         for (const bullet of this.enemyBullets) {
             const screenX = bullet.x - this.viewportX;
-            this.ctx.fillRect(screenX, bullet.y, bullet.width, bullet.height);
+            this.ctx.fillRect(screenX - 4, bullet.y - 4, 8, 8); // Made bullets bigger (8x8 instead of 4x4)
         }
     }
 
@@ -1221,6 +1296,15 @@ class Game {
         this.ctx.fillStyle = '#000';
         this.ctx.font = '20px Arial';
         this.ctx.fillText(`Distance: ${this.gameState.distance}m / ${this.gameState.winDistance}m`, 10, 30);
+        
+        // Draw kill counter at bottom right with background
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        const killText = `Level ${this.gameState.level} - Kills: ${this.gameState.killCount}/${this.gameState.level === 1 ? this.gameState.requiredKills : this.gameState.requiredKills * 2}`;
+        const killMetrics = this.ctx.measureText(killText);
+        this.ctx.fillRect(this.canvas.width - killMetrics.width - 30, this.canvas.height - 40, killMetrics.width + 20, 30);
+        this.ctx.fillStyle = '#00FF00';
+        this.ctx.font = 'bold 20px Arial';
+        this.ctx.fillText(killText, this.canvas.width - killMetrics.width - 20, this.canvas.height - 20);
         
         // Draw ammo counter at bottom left with fire mode indicator
         this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
@@ -1278,6 +1362,21 @@ class Game {
             this.ctx.fillStyle = '#00ff00';
             this.ctx.font = '16px Arial';
             this.ctx.fillText('NUKE: READY', 20, this.canvas.height - 100);
+        }
+
+        // Draw special laser cooldown if it's not ready
+        if (this.specialLaserCooldown > 0) {
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            this.ctx.fillRect(10, this.canvas.height - 150, 150, 30);
+            this.ctx.fillStyle = '#00FFFF';
+            this.ctx.font = '16px Arial';
+            this.ctx.fillText(`LASER: ${Math.ceil(this.specialLaserCooldown / 60)}s`, 20, this.canvas.height - 130);
+        } else if (!this.specialLaser) {
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            this.ctx.fillRect(10, this.canvas.height - 150, 150, 30);
+            this.ctx.fillStyle = '#00FFFF';
+            this.ctx.font = '16px Arial';
+            this.ctx.fillText('LASER: READY', 20, this.canvas.height - 130);
         }
     }
 
@@ -1441,13 +1540,21 @@ class Game {
 
             // Shoot at player
             enemy.shootTimer++;
-            if (enemy.shootTimer >= enemy.shootInterval) {
+            const shootInterval = this.gameState.level === 1 ? enemy.shootInterval : enemy.shootInterval * 0.5; // Shoot twice as fast in level 2
+            if (enemy.shootTimer >= shootInterval) {
                 enemy.shootTimer = 0;
                 this.enemyShoot(enemy);
             }
 
             return true;
         });
+
+        // Check if level is complete
+        if (this.gameState.killCount >= this.gameState.requiredKills && this.gameState.level === 1) {
+            this.startLevel2();
+        } else if (this.gameState.killCount >= this.gameState.requiredKills * 2 && this.gameState.level === 2) {
+            this.gameState.gameWon = true;
+        }
     }
 
     enemyShoot(enemy) {
@@ -1806,6 +1913,24 @@ class Game {
         });
         
         document.body.appendChild(button);
+    }
+
+    startLevel2() {
+        this.gameState.level = 2;
+        this.gameState.maxEnemies = 10; // Double the enemies
+        this.maxEnemies = this.gameState.maxEnemies;
+        // Reset enemy spawn timer to immediately start spawning new enemies
+        this.spawnEnemyTimer = this.enemySpawnInterval;
+    }
+
+    createSpecialLaser() {
+        this.audio.play('shoot');
+        this.specialLaser = {
+            x: this.player.x,
+            y: this.player.y,
+            angle: this.player.gunAngle
+        };
+        this.specialLaserDuration = 15 * 60; // 15 seconds at 60fps
     }
 }
 
