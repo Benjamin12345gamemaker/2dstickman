@@ -17,35 +17,71 @@ class AudioManager {
             weaponSwitch: new Audio('sounds/weapon_switch.mp3')
         };
 
+        // Create sound pools for frequently played sounds
+        this.soundPools = {
+            shoot: Array(5).fill().map(() => new Audio('sounds/retro-laser-1-236669.mp3')),
+            explosion: Array(3).fill().map(() => new Audio('sounds/explosion.mp3')),
+            enemyDeath: Array(3).fill().map(() => new Audio('sounds/enemy_death.mp3')),
+            hit: Array(3).fill().map(() => new Audio('sounds/hit.mp3'))
+        };
+
         // Set volume for all sounds
         Object.values(this.sounds).forEach(sound => {
             sound.volume = 0.3;
+        });
+
+        // Set volume for sound pools
+        Object.values(this.soundPools).forEach(pool => {
+            pool.forEach(sound => {
+                sound.volume = 0.3;
+            });
         });
 
         // Set specific volumes
         this.sounds.explosion.volume = 0.4;
         this.sounds.nuke.volume = 0.5;
         this.sounds.shoot.volume = 0.15;
+        this.soundPools.shoot.forEach(sound => sound.volume = 0.15);
         
         // Remove gun sound loop
         this.sounds.shoot.loop = false;
         this.lastFlySound = 0;
+        this.currentPoolIndex = {};
     }
 
     play(soundName) {
+        // Handle pooled sounds
+        if (this.soundPools[soundName]) {
+            if (!this.currentPoolIndex[soundName]) {
+                this.currentPoolIndex[soundName] = 0;
+            }
+            
+            const pool = this.soundPools[soundName];
+            const sound = pool[this.currentPoolIndex[soundName]];
+            
+            if (sound.paused || sound.ended) {
+                sound.currentTime = 0;
+                sound.play().catch(e => console.log("Audio play failed:", e));
+            }
+            
+            this.currentPoolIndex[soundName] = (this.currentPoolIndex[soundName] + 1) % pool.length;
+            return;
+        }
+
+        // Handle regular sounds
         const sound = this.sounds[soundName];
         if (sound) {
             // For fly sound, prevent too frequent playback
             if (soundName === 'fly') {
                 const now = Date.now();
-                if (now - this.lastFlySound < 100) return; // Only play every 100ms
+                if (now - this.lastFlySound < 100) return;
                 this.lastFlySound = now;
             }
             
-            // Create a new audio element for all sounds
-            const clone = sound.cloneNode();
-            clone.volume = sound.volume;
-            clone.play().catch(e => console.log("Audio play failed:", e));
+            if (sound.paused || sound.ended) {
+                sound.currentTime = 0;
+                sound.play().catch(e => console.log("Audio play failed:", e));
+            }
         }
     }
 }
@@ -77,12 +113,14 @@ class Game {
             y: initialGroundHeight - 40,
             width: 40,  // Increased for ship
             height: 24, // Adjusted for ship
+            health: 100,
+            maxHealth: 100,
             speedX: 0,
             speedY: 0,
             maxSpeedX: 6,
             acceleration: 0.3,
-            friction: 0.95, // Increased for smoother space movement
-            gravity: 0.2,   // Reduced for space-like feel
+            friction: 0.95,
+            gravity: 0.2,
             jumpForce: -45,
             canJump: true,
             doubleJump: false,
@@ -90,7 +128,7 @@ class Game {
             rotation: 0,
             gunAngle: 0,
             forcedSlide: false,
-            canFly: true,  // Always true for spaceship
+            canFly: true,
             flyingSpeed: -6,
             descendSpeed: 3,
             isDead: false,
@@ -98,7 +136,8 @@ class Game {
             flyingAcceleration: 0.45,
             maxFlySpeed: 12,
             currentFlySpeed: 0,
-            ammo: 100,     // More ammo for ship
+            maxAmmo: 200,     // Added maxAmmo property
+            ammo: 200,        // Increased starting ammo
             isFullAuto: true,
             currentWeapon: 'rifle',
             isZoomed: false,
@@ -1378,6 +1417,24 @@ class Game {
             this.ctx.font = '16px Arial';
             this.ctx.fillText('LASER: READY', 20, this.canvas.height - 130);
         }
+
+        // Draw health bar at top left
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(10, 10, 200, 30);
+        
+        // Health bar background
+        this.ctx.fillStyle = '#333';
+        this.ctx.fillRect(15, 15, 190, 20);
+        
+        // Health bar fill
+        const healthPercent = this.player.health / this.player.maxHealth;
+        this.ctx.fillStyle = healthPercent > 0.6 ? '#00ff00' : healthPercent > 0.3 ? '#ffff00' : '#ff0000';
+        this.ctx.fillRect(15, 15, 190 * healthPercent, 20);
+        
+        // Health text
+        this.ctx.fillStyle = '#fff';
+        this.ctx.font = 'bold 16px Arial';
+        this.ctx.fillText(`${Math.ceil(this.player.health)} / ${this.player.maxHealth}`, 85, 31);
     }
 
     drawWalls() {
@@ -1546,6 +1603,16 @@ class Game {
                 this.enemyShoot(enemy);
             }
 
+            // Check collision with player for ammo pickup
+            if (this.checkCollision(enemy, this.player)) {
+                const ammoPickup = Math.min(enemy.ammo, this.player.maxAmmo - this.player.ammo);
+                if (ammoPickup > 0) {
+                    this.player.ammo = Math.min(this.player.maxAmmo, this.player.ammo + ammoPickup);
+                    this.audio.play('collect');
+                }
+                return false;
+            }
+
             return true;
         });
 
@@ -1586,9 +1653,13 @@ class Game {
             bullet.x += bullet.dx;
             bullet.y += bullet.dy;
 
-            // Check collision with player
+            // Check collision with player and apply damage
             if (this.checkCollision(bullet, this.player)) {
-                this.player.isDead = true;
+                this.player.health -= 20; // Each bullet deals 20 damage
+                if (this.player.health <= 0) {
+                    this.player.isDead = true;
+                }
+                this.audio.play('hit');
                 return false;
             }
 
@@ -1618,13 +1689,15 @@ class Game {
     }
 
     restartGame() {
-        // Reset player
+        // Reset player position and state
         this.player.x = 100;
         this.player.y = this.canvas.height * 0.6 - 40;
         this.player.speedX = 0;
         this.player.speedY = 0;
         this.player.isDead = false;
         this.player.canFly = false;
+        this.player.health = this.player.maxHealth;
+        this.player.ammo = 200; // Reset to initial ammo amount
 
         // Reset game state
         this.viewportX = 0;
@@ -1643,11 +1716,11 @@ class Game {
         this.terrainDamage.clear();
         this.generateTerrain();
 
-        this.player.ammo = 20; // Reset ammo on death
-
         // Reset nuke properties
         this.nukeReady = true;
         this.nukeCooldown = 0;
+
+        this.player.ammo = 200; // Reset ammo on death
     }
 
     createBloodEffect(x, y) {
@@ -1930,7 +2003,7 @@ class Game {
             y: this.player.y,
             angle: this.player.gunAngle
         };
-        this.specialLaserDuration = 15 * 60; // 15 seconds at 60fps
+        this.specialLaserDuration = 5 * 60; // Changed to 5 seconds at 60fps
     }
 }
 
