@@ -222,8 +222,8 @@ class Game {
         this.deadEnemies = []; // Store dying enemies for animation
         this.enemyBullets = [];
         this.spawnEnemyTimer = 0;
-        this.enemySpawnInterval = 30; // Changed from 120 to 30 for much faster spawning
-        this.maxEnemies = this.gameState.maxEnemies; // Maximum number of enemies at once
+        this.enemySpawnInterval = 5; // Changed from 30 to 5 for much faster spawning (6x faster)
+        this.maxEnemies = 35; // Increased from 5 to 35 for more enemies at once
         
         // Add blood particle properties
         this.bloodParticles = [];
@@ -280,6 +280,14 @@ class Game {
         // Add special laser cooldown properties
         this.specialLaserCooldown = 0;
         this.specialLaserMaxCooldown = 10 * 60; // 10 seconds cooldown at 60fps
+        
+        // Add nuke animation properties
+        this.nukeCountdown = 0;
+        this.nukeFlashIntensity = 0;
+        this.isNukeAnimationActive = false;
+        this.nukeAnimationFrame = 0;
+        this.lastCountdownNumber = 5;
+        this.flashSpeed = 0.2; // Controls flash speed
     }
 
     resizeCanvas() {
@@ -485,7 +493,7 @@ class Game {
                     y: this.player.y + 25 * laserDy,
                     dx: laserDx * weapon.bulletSpeed,
                     dy: laserDy * weapon.bulletSpeed,
-                    color: weapon.color
+                    color: '#00FF00'  // Changed to match player color
                 });
                 
                 // Create particle effect in launch direction
@@ -498,7 +506,7 @@ class Game {
                         dx: Math.cos(launchAngle + spread) * speed,
                         dy: Math.sin(launchAngle + spread) * speed,
                         life: 20 + Math.random() * 10,
-                        color: weapon.color,
+                        color: '#00FF00',  // Changed to match player color
                         size: 2 + Math.random() * 2
                     });
                 }
@@ -516,7 +524,7 @@ class Game {
                             y: this.player.y + 25 * laserDy,
                             dx: laserDx * weapon.bulletSpeed,
                             dy: laserDy * weapon.bulletSpeed,
-                            color: '#ff0000'  // Added color for lasers
+                            color: '#00FF00'  // Changed to match player color
                         });
                         this.player.ammo--;
                     }
@@ -531,7 +539,7 @@ class Game {
                     y: this.player.y + 25 * laserDy,
                     dx: laserDx * weapon.bulletSpeed,
                     dy: laserDy * weapon.bulletSpeed,
-                    color: '#ff0000'  // Added color for lasers
+                    color: '#00FF00'  // Changed to match player color
                 });
                 this.player.ammo--;
             }
@@ -626,6 +634,9 @@ class Game {
         if (this.gameState.distance >= this.gameState.winDistance) {
             this.gameState.gameWon = true;
         }
+
+        // Update nuke animation
+        this.updateNukeAnimation();
 
         // Check if player hits bottom of screen
         if (this.player.y > this.canvas.height) {
@@ -1142,7 +1153,7 @@ class Game {
         for (const laser of this.lasers) {
             const screenX = laser.x - this.viewportX;
             
-            this.ctx.strokeStyle = laser.color || '#ff0000';
+            this.ctx.strokeStyle = laser.color || '#00FF00';  // Default to player color if not specified
             this.ctx.beginPath();
             this.ctx.moveTo(screenX, laser.y);
             this.ctx.lineTo(screenX - laser.dx, laser.y - laser.dy);
@@ -1152,7 +1163,7 @@ class Game {
         // Draw special laser if active
         if (this.specialLaser) {
             const screenX = this.specialLaser.x - this.viewportX;
-            this.ctx.strokeStyle = '#00FFFF';
+            this.ctx.strokeStyle = '#00FF00';  // Changed to match player color
             this.ctx.lineWidth = 8;
             this.ctx.beginPath();
             this.ctx.moveTo(screenX, this.specialLaser.y);
@@ -1161,7 +1172,7 @@ class Game {
             this.ctx.stroke();
             
             // Add glow effect
-            this.ctx.strokeStyle = '#00FFFF44';
+            this.ctx.strokeStyle = '#00FF0044';  // Changed to match player color with transparency
             this.ctx.lineWidth = 16;
             this.ctx.stroke();
         }
@@ -1631,8 +1642,8 @@ class Game {
         const dy = this.player.y - enemy.y;
         const angle = Math.atan2(dy, dx);
         
-        // Set 65% inaccuracy (35% accuracy)
-        const maxInaccuracy = Math.PI * 0.65; // 65% of 180 degrees
+        // Set 85% inaccuracy (15% accuracy) - increased from 65%
+        const maxInaccuracy = Math.PI * 0.85;
         const inaccuracy = (Math.random() - 0.5) * maxInaccuracy;
         const finalAngle = angle + inaccuracy;
 
@@ -1934,9 +1945,7 @@ class Game {
         
         // Flatten the terrain
         for (let i = viewStart; i < viewEnd; i++) {
-            // Set all terrain to a constant height, leaving a thin layer at the bottom
-            this.terrain[i].y = this.canvas.height * 0.9; // Move 90% down the screen
-            // Update the terrain damage map
+            this.terrain[i].y = this.canvas.height * 0.9;
             this.terrainDamage.set(Math.floor(this.terrain[i].x), this.terrain[i].y);
         }
         
@@ -2004,6 +2013,131 @@ class Game {
             angle: this.player.gunAngle
         };
         this.specialLaserDuration = 5 * 60; // Changed to 5 seconds at 60fps
+    }
+
+    startNukeCountdown() {
+        // Start the countdown animation
+        this.isNukeAnimationActive = true;
+        this.nukeCountdown = 5;
+        this.nukeAnimationFrame = 0;
+        this.nukeFlashIntensity = 0;
+        
+        // Play initial warning sound
+        this.audio.play('reload');
+    }
+
+    updateNukeAnimation() {
+        if (!this.isNukeAnimationActive) return;
+
+        this.nukeAnimationFrame++;
+        
+        // Update countdown every 60 frames (1 second)
+        const currentNumber = 5 - Math.floor(this.nukeAnimationFrame / 60);
+        if (currentNumber !== this.lastCountdownNumber) {
+            this.lastCountdownNumber = currentNumber;
+            this.audio.play('weaponSwitch');
+            // Increase flash speed as countdown progresses
+            this.flashSpeed = 0.2 + (5 - currentNumber) * 0.1;
+        }
+
+        // More dramatic flashing effect that intensifies
+        this.nukeFlashIntensity = Math.abs(Math.sin(this.nukeAnimationFrame * this.flashSpeed)) * 0.8;
+        
+        // When countdown reaches 0, trigger the actual nuke
+        if (currentNumber < 0) {
+            this.isNukeAnimationActive = false;
+            this.executeNuke();
+        }
+    }
+
+    executeNuke() {
+        this.audio.play('nuke');
+        // Create massive explosion effect
+        const centerX = this.player.x;
+        const centerY = this.player.y;
+        
+        // Create explosion particles
+        for (let i = 0; i < 200; i++) {
+            const angle = (Math.PI * 2 * i) / 200;
+            const speed = 10 + Math.random() * 15;
+            const size = 5 + Math.random() * 10;
+            this.particles.push({
+                x: centerX,
+                y: centerY,
+                dx: Math.cos(angle) * speed,
+                dy: Math.sin(angle) * speed - 5,
+                life: 120,
+                color: ['#FF0000', '#FF4400', '#FF8800', '#FFAA00'][Math.floor(Math.random() * 4)],
+                size: size
+            });
+        }
+        
+        // Flatten terrain in view
+        const viewStart = Math.max(0, Math.floor((this.viewportX - this.canvas.width) / (this.worldWidth / this.terrain.length)));
+        const viewEnd = Math.min(this.terrain.length, Math.ceil((this.viewportX + this.canvas.width * 2) / (this.worldWidth / this.terrain.length)));
+        
+        // Flatten the terrain
+        for (let i = viewStart; i < viewEnd; i++) {
+            this.terrain[i].y = this.canvas.height * 0.9;
+            this.terrainDamage.set(Math.floor(this.terrain[i].x), this.terrain[i].y);
+        }
+        
+        // Kill all enemies in view
+        this.enemies.forEach(enemy => {
+            if (enemy.x >= this.viewportX - this.canvas.width && 
+                enemy.x <= this.viewportX + this.canvas.width * 2) {
+                enemy.isDying = true;
+                enemy.deathTimer = 0;
+                enemy.speedY = -10;
+                enemy.color = '#000000';
+                enemy.canShoot = false;
+                this.deadEnemies.push(enemy);
+                this.createBloodEffect(enemy.x, enemy.y);
+            }
+        });
+        this.enemies = this.enemies.filter(enemy => !enemy.isDying);
+        
+        // Clear all walls in view
+        this.walls = this.walls.filter(wall => 
+            wall.x < this.viewportX - this.canvas.width || 
+            wall.x > this.viewportX + this.canvas.width * 2
+        );
+        
+        // Set cooldown
+        this.nukeReady = false;
+        this.nukeCooldown = 30 * 60; // 30 seconds at 60 FPS
+    }
+
+    drawNukeAnimation() {
+        if (!this.isNukeAnimationActive) return;
+
+        // Draw red overlay with more intense flashing
+        this.ctx.fillStyle = `rgba(255, 0, 0, ${this.nukeFlashIntensity})`;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Draw countdown number with shadow for better visibility
+        if (this.lastCountdownNumber > 0) {
+            this.ctx.save();
+            
+            // Add shadow
+            this.ctx.shadowColor = 'black';
+            this.ctx.shadowBlur = 20;
+            this.ctx.shadowOffsetX = 4;
+            this.ctx.shadowOffsetY = 4;
+
+            // Draw main number
+            this.ctx.fillStyle = '#FF0000';
+            this.ctx.font = 'bold 200px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.fillText(this.lastCountdownNumber.toString(), this.canvas.width / 2, this.canvas.height / 2);
+
+            // Add warning text
+            this.ctx.font = 'bold 40px Arial';
+            this.ctx.fillText('NUCLEAR STRIKE IMMINENT', this.canvas.width / 2, this.canvas.height / 2 - 150);
+
+            this.ctx.restore();
+        }
     }
 }
 
