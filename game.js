@@ -131,7 +131,7 @@ class Game {
                 shootInterval: 500,
                 bulletSpeed: 20,
                 spread: 0,
-                launchForce: 40,  // Changed from 400 to 40 (80% of 50)
+                launchForce: 30,  // Reduced from 40 to 30
                 color: '#4488ff'
             }
         };
@@ -746,8 +746,8 @@ class Game {
                 this.player.speedX -= this.player.currentWeapon === 'launchGun' ? this.player.acceleration * 2 : this.player.acceleration * 1.5;
             }
             
-            // Apply gravity (reduced for launch gun)
-            this.player.speedY += this.player.currentWeapon === 'launchGun' ? 0.2 : 0.5;
+            // Apply gravity (slightly increased, and still reduced for launch gun)
+            this.player.speedY += this.player.currentWeapon === 'launchGun' ? 0.3 : 0.6;
             
             // Cap falling speed
             if (this.player.speedY > 20) {
@@ -758,11 +758,18 @@ class Game {
             const maxSpeed = this.player.currentWeapon === 'launchGun' ? 45 : 35;
             this.player.speedX = Math.min(maxSpeed, Math.max(-maxSpeed, this.player.speedX));
             
-            // Apply horizontal friction (reduced for launch gun)
-            this.player.speedX *= this.player.currentWeapon === 'launchGun' ? 0.99 : 0.9;
+            // Get ground height once for multiple uses
+            const groundHeight = this.getGroundHeight(this.player.x);
+            
+            // Apply horizontal friction based on whether in air and using launch gun
+            const isInAir = this.player.y < groundHeight - this.player.height;
+            if (this.player.currentWeapon === 'launchGun' && isInAir) {
+                this.player.speedX *= 0.99; // Low friction only in air with launch gun
+            } else {
+                this.player.speedX *= 0.9; // Normal friction otherwise
+            }
             
             // Check if on ground
-            const groundHeight = this.getGroundHeight(this.player.x);
             if (this.player.y >= groundHeight - this.player.height) {
                 this.player.y = groundHeight - this.player.height;
                 this.player.speedY = 0;
@@ -823,13 +830,11 @@ class Game {
             return true;
         });
         
-        // Update viewport to allow free movement
-        const minViewportX = this.player.x - this.canvas.width + 100; // Keep at least 100px margin
-        const maxViewportX = this.player.x - 100; // Keep at least 100px margin
-        const targetViewportX = Math.min(maxViewportX, Math.max(minViewportX, this.viewportX));
-        
-        // Smooth viewport movement
-        this.viewportX += (targetViewportX - this.viewportX) * 0.1;
+        // Update viewport to move when player is 3/4 of the way to screen edge
+        const viewportThreshold = this.canvas.width * 0.75; // 3/4 of screen width
+        if (this.player.x - this.viewportX > viewportThreshold) {
+            this.viewportX = this.player.x - viewportThreshold;
+        }
 
         // Generate more terrain if needed
         if (this.player.x > this.worldWidth - this.canvas.width) {
@@ -1452,8 +1457,8 @@ class Game {
         const dy = this.player.y - enemy.y;
         const angle = Math.atan2(dy, dx);
         
-        // Randomized accuracy between 20% and 80%
-        const maxInaccuracy = Math.PI * (0.2 + Math.random() * 0.6);
+        // Set 65% inaccuracy (35% accuracy)
+        const maxInaccuracy = Math.PI * 0.65; // 65% of 180 degrees
         const inaccuracy = (Math.random() - 0.5) * maxInaccuracy;
         const finalAngle = angle + inaccuracy;
 
