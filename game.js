@@ -1229,9 +1229,11 @@ class Game {
             });
         }
 
-        // Create deep hole in terrain
+        // Create hole in terrain
         const multiplier = isCharged ? this.chargedGrenadeMultiplier : 1;
-        const holeWidth = this.grenadeWidth * this.worldWidth / this.canvas.width * multiplier;
+        // Calculate hole width to be 1/4 of screen width for charged grenades
+        const baseHoleWidth = isCharged ? (this.canvas.width / 4) : (this.canvas.width / 16);
+        const holeWidth = baseHoleWidth * (this.worldWidth / this.canvas.width);
         const holeDepth = this.grenadeRadius * multiplier;
         
         for (let i = 0; i < this.terrain.length; i++) {
