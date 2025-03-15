@@ -740,25 +740,26 @@ class Game {
         } else {
             // Stick figure movement - affected by gravity
             if (this.keys.d) {
-                this.player.speedX += this.player.acceleration;
+                this.player.speedX += this.player.currentWeapon === 'launchGun' ? this.player.acceleration * 2 : this.player.acceleration * 1.5;
             }
             if (this.keys.a) {
-                this.player.speedX -= this.player.acceleration;
+                this.player.speedX -= this.player.currentWeapon === 'launchGun' ? this.player.acceleration * 2 : this.player.acceleration * 1.5;
             }
             
-            // Apply gravity
-            this.player.speedY += 0.5;
+            // Apply gravity (reduced for launch gun)
+            this.player.speedY += this.player.currentWeapon === 'launchGun' ? 0.2 : 0.5;
             
             // Cap falling speed
             if (this.player.speedY > 20) {
                 this.player.speedY = 20;
             }
             
-            // Cap horizontal speed
-            this.player.speedX = Math.min(30, Math.max(-30, this.player.speedX));  // Changed from 15 to 30
+            // Cap horizontal speed (higher for launch gun)
+            const maxSpeed = this.player.currentWeapon === 'launchGun' ? 45 : 35;
+            this.player.speedX = Math.min(maxSpeed, Math.max(-maxSpeed, this.player.speedX));
             
-            // Apply horizontal friction
-            this.player.speedX *= 0.9;
+            // Apply horizontal friction (reduced for launch gun)
+            this.player.speedX *= this.player.currentWeapon === 'launchGun' ? 0.99 : 0.9;
             
             // Check if on ground
             const groundHeight = this.getGroundHeight(this.player.x);
@@ -770,7 +771,7 @@ class Game {
             
             // Handle jumping (only when on ground)
             if (this.keys.w && this.player.canJump) {
-                this.player.speedY = -15;
+                this.player.speedY = this.player.currentWeapon === 'launchGun' ? -18 : -15;
                 this.player.canJump = false;
                 this.audio.play('jump');
             }
@@ -822,8 +823,13 @@ class Game {
             return true;
         });
         
-        // Update viewport to allow player to move closer to edges
-        this.viewportX = this.player.x - (this.canvas.width * 0.8);  // Changed from canvas.width/3 to canvas.width * 0.8
+        // Update viewport to allow free movement
+        const minViewportX = this.player.x - this.canvas.width + 100; // Keep at least 100px margin
+        const maxViewportX = this.player.x - 100; // Keep at least 100px margin
+        const targetViewportX = Math.min(maxViewportX, Math.max(minViewportX, this.viewportX));
+        
+        // Smooth viewport movement
+        this.viewportX += (targetViewportX - this.viewportX) * 0.1;
 
         // Generate more terrain if needed
         if (this.player.x > this.worldWidth - this.canvas.width) {
