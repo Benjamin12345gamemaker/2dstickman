@@ -40,7 +40,8 @@ class Game {
             flyingAcceleration: 0.4,
             maxFlySpeed: 8,
             currentFlySpeed: 0,
-            ammo: 20 // Starting ammo count
+            ammo: 20,
+            isFullAuto: true // Add fire mode property
         };
 
         // Input handling
@@ -202,6 +203,9 @@ class Game {
                 this.isChargingGrenade = true;
                 this.keys.e = true;
                 break;
+            case 'shift': // Add shift key handler
+                this.player.isFullAuto = !this.player.isFullAuto;
+                break;
         }
     }
 
@@ -239,6 +243,10 @@ class Game {
                 this.throwChargedGrenade();
             } else {
                 this.mouseDown = true;
+                if (!this.player.isFullAuto) { // Single shot in semi-auto
+                    this.shoot();
+                    this.mouseDown = false;
+                }
             }
         }
     }
@@ -865,10 +873,20 @@ class Game {
     }
 
     drawUI() {
+        // Draw distance counter at top
         this.ctx.fillStyle = '#000';
         this.ctx.font = '20px Arial';
         this.ctx.fillText(`Distance: ${this.gameState.distance}m / ${this.gameState.winDistance}m`, 10, 30);
-        this.ctx.fillText(`Ammo: ${this.player.ammo}`, 10, 60); // Add ammo counter
+        
+        // Draw ammo counter at bottom left with fire mode indicator
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(10, this.canvas.height - 70, 150, 60);
+        this.ctx.fillStyle = '#fff';
+        this.ctx.font = 'bold 24px Arial';
+        this.ctx.fillText(`AMMO: ${this.player.ammo}`, 20, this.canvas.height - 40);
+        this.ctx.font = '16px Arial';
+        this.ctx.fillStyle = this.player.isFullAuto ? '#00ff00' : '#ff9900';
+        this.ctx.fillText(this.player.isFullAuto ? 'FULL AUTO' : 'SEMI AUTO', 20, this.canvas.height - 20);
         
         if (this.gameState.gameWon) {
             this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
