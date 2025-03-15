@@ -39,7 +39,8 @@ class Game {
             capeAnimation: 0, // For cape animation
             flyingAcceleration: 0.4,
             maxFlySpeed: 8,
-            currentFlySpeed: 0
+            currentFlySpeed: 0,
+            ammo: 20 // Starting ammo count
         };
 
         // Input handling
@@ -250,7 +251,7 @@ class Game {
 
     shoot() {
         const currentTime = Date.now();
-        if (currentTime - this.lastShotTime >= this.shootInterval) {
+        if (currentTime - this.lastShotTime >= this.shootInterval && this.player.ammo > 0) {
             const laserDx = Math.cos(this.player.gunAngle);
             const laserDy = Math.sin(this.player.gunAngle);
             
@@ -261,6 +262,7 @@ class Game {
                 dy: laserDy * this.laserSpeed
             });
             
+            this.player.ammo--; // Decrease ammo count
             this.lastShotTime = currentTime;
         }
     }
@@ -431,6 +433,7 @@ class Game {
                     enemy.speedY = -5;
                     enemy.color = '#000000';
                     enemy.canShoot = false;
+                    this.player.ammo += enemy.ammo; // Add enemy's ammo to player
                     this.deadEnemies.push(enemy);
                     this.enemies.splice(i, 1);
                     this.createBloodEffect(enemy.x, enemy.y);
@@ -865,6 +868,7 @@ class Game {
         this.ctx.fillStyle = '#000';
         this.ctx.font = '20px Arial';
         this.ctx.fillText(`Distance: ${this.gameState.distance}m / ${this.gameState.winDistance}m`, 10, 30);
+        this.ctx.fillText(`Ammo: ${this.player.ammo}`, 10, 60); // Add ammo counter
         
         if (this.gameState.gameWon) {
             this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
@@ -959,7 +963,7 @@ class Game {
     spawnEnemy() {
         const screenRight = this.viewportX + this.canvas.width;
         const x = screenRight + Math.random() * 500;
-        const groundY = this.getGroundHeight(x); // Get terrain height at spawn point
+        const groundY = this.getGroundHeight(x);
         
         const enemy = {
             x: x,
@@ -972,12 +976,13 @@ class Game {
             deathTimer: 0,
             rotation: 0,
             speedY: 0,
-            speedX: -1 - Math.random(), // Random horizontal speed
+            speedX: -1 - Math.random(),
             movementTimer: 0,
-            movementInterval: 120 + Math.random() * 60, // Random movement change interval
+            movementInterval: 120 + Math.random() * 60,
             canShoot: true,
             color: '#ff0000',
-            jumpForce: -8 - Math.random() * 4 // Random jump force
+            jumpForce: -8 - Math.random() * 4,
+            ammo: 10 + Math.floor(Math.random() * 11) // Random ammo between 10-20
         };
         this.enemies.push(enemy);
     }
@@ -1112,6 +1117,8 @@ class Game {
         // Reset terrain
         this.terrainDamage.clear();
         this.generateTerrain();
+
+        this.player.ammo = 20; // Reset ammo on death
     }
 
     createBloodEffect(x, y) {
