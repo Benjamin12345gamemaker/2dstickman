@@ -126,6 +126,13 @@ class Game {
                 bulletSpeed: 25,
                 spread: 0,
                 zoomFactor: 2
+            },
+            launchGun: {
+                shootInterval: 500,
+                bulletSpeed: 20,
+                spread: 0,
+                launchForce: 50,
+                color: '#4488ff'
             }
         };
 
@@ -320,6 +327,7 @@ class Game {
             case '1':
             case '2':
             case '3':
+            case '6':
                 this.audio.play('weaponSwitch');
                 if (event.key === '1') {
                     this.player.currentWeapon = 'rifle';
@@ -328,9 +336,12 @@ class Game {
                 } else if (event.key === '2') {
                     this.player.currentWeapon = 'shotgun';
                     this.shootInterval = this.weapons.shotgun.shootInterval;
-                } else {
+                } else if (event.key === '3') {
                     this.player.currentWeapon = 'sniper';
                     this.shootInterval = this.weapons.sniper.shootInterval;
+                } else if (event.key === '6' && !this.isSpaceship) {
+                    this.player.currentWeapon = 'launchGun';
+                    this.shootInterval = this.weapons.launchGun.shootInterval;
                 }
                 break;
             case '4':
@@ -401,7 +412,42 @@ class Game {
         const weapon = this.weapons[this.player.currentWeapon];
         
         if (currentTime - this.lastShotTime >= this.shootInterval) {
-            if (this.player.currentWeapon === 'shotgun') {
+            if (this.player.currentWeapon === 'launchGun') {
+                this.audio.play('dash');
+                // Calculate launch direction (opposite of aim)
+                const launchAngle = this.player.gunAngle + Math.PI;
+                
+                // Apply launch force to player
+                this.player.speedX = Math.cos(launchAngle) * weapon.launchForce;
+                this.player.speedY = Math.sin(launchAngle) * weapon.launchForce;
+                
+                // Create projectile in shooting direction
+                const laserDx = Math.cos(this.player.gunAngle);
+                const laserDy = Math.sin(this.player.gunAngle);
+                
+                this.lasers.push({
+                    x: this.player.x + 25 * laserDx,
+                    y: this.player.y + 25 * laserDy,
+                    dx: laserDx * weapon.bulletSpeed,
+                    dy: laserDy * weapon.bulletSpeed,
+                    color: weapon.color
+                });
+                
+                // Create particle effect in launch direction
+                for (let i = 0; i < 20; i++) {
+                    const spread = (Math.random() - 0.5) * 0.5;
+                    const speed = 3 + Math.random() * 4;
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        dx: Math.cos(launchAngle + spread) * speed,
+                        dy: Math.sin(launchAngle + spread) * speed,
+                        life: 20 + Math.random() * 10,
+                        color: weapon.color,
+                        size: 2 + Math.random() * 2
+                    });
+                }
+            } else if (this.player.currentWeapon === 'shotgun') {
                 if (this.player.ammo >= weapon.pellets) {
                     this.audio.play('shoot');
                     for (let i = 0; i < weapon.pellets; i++) {
@@ -748,11 +794,9 @@ class Game {
             return true;
         });
         
-        // Update viewport to follow player
-        if (this.player.x > this.canvas.width * 0.4) {
-            this.viewportX = this.player.x - this.canvas.width * 0.4;
-        }
-        
+        // Update viewport to keep player centered
+        this.viewportX = this.player.x - this.canvas.width / 2;
+
         // Generate more terrain if needed
         if (this.player.x > this.worldWidth - this.canvas.width) {
             this.worldWidth += 3000;
