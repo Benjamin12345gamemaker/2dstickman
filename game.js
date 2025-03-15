@@ -103,6 +103,8 @@ class Game {
         this.grenades = [];
         this.grenadeRadius = 50;
         this.grenadeWidth = 5;
+        this.isChargingGrenade = false;
+        this.chargedGrenadeMultiplier = 50; // Reduced from 100 to 50 (2x weaker)
         
         // Add cursor properties
         this.cursor = {
@@ -196,9 +198,7 @@ class Game {
             case 's': this.keys.s = true; break;
             case 'd': this.keys.d = true; break;
             case 'e': 
-                if (!this.keys.e) { // Only throw if key was just pressed
-                    this.throwGrenade();
-                }
+                this.isChargingGrenade = true;
                 this.keys.e = true;
                 break;
         }
@@ -210,7 +210,10 @@ class Game {
             case 'a': this.keys.a = false; break;
             case 's': this.keys.s = false; break;
             case 'd': this.keys.d = false; break;
-            case 'e': this.keys.e = false; break;
+            case 'e':
+                this.isChargingGrenade = false;
+                this.keys.e = false;
+                break;
         }
     }
 
@@ -231,8 +234,11 @@ class Game {
 
     handleMouseDown(event) {
         if (event.button === 0) { // Left click
-            this.mouseDown = true;
-            this.shoot();
+            if (this.isChargingGrenade) {
+                this.throwChargedGrenade();
+            } else {
+                this.mouseDown = true;
+            }
         }
     }
 
@@ -372,10 +378,14 @@ class Game {
 
     update() {
         // Check win condition
-        this.gameState.distance = Math.floor(this.player.x / 10); // Convert pixels to meters
+        this.gameState.distance = Math.floor(this.player.x / 10);
         if (this.gameState.distance >= this.gameState.winDistance) {
             this.gameState.gameWon = true;
-            // You could add win screen here
+        }
+
+        // Check if player hits bottom of screen
+        if (this.player.y > this.canvas.height) {
+            this.player.isDead = true;
         }
 
         if (this.player.isDead) {
@@ -457,7 +467,7 @@ class Game {
 
                 const groundHeight = this.getGroundHeight(grenade.x);
                 if (grenade.y >= groundHeight) {
-                    this.createGrenadeExplosion(grenade.x, grenade.y);
+                    this.createGrenadeExplosion(grenade.x, grenade.y, grenade.isCharged);
                     grenade.exploded = true;
                 }
             }
@@ -892,12 +902,21 @@ class Game {
         this.drawPlayer();
         
         // Draw grenades
-        this.ctx.fillStyle = '#333333';
         for (const grenade of this.grenades) {
             const screenX = grenade.x - this.viewportX;
+            this.ctx.fillStyle = grenade.isCharged ? '#FF0000' : '#333333';
             this.ctx.beginPath();
-            this.ctx.arc(screenX, grenade.y, 5, 0, Math.PI * 2);
+            this.ctx.arc(screenX, grenade.y, grenade.isCharged ? 8 : 5, 0, Math.PI * 2);
             this.ctx.fill();
+        }
+        
+        // Draw charging indicator when holding E
+        if (this.isChargingGrenade) {
+            this.ctx.strokeStyle = '#FF0000';
+            this.ctx.lineWidth = 3;
+            this.ctx.beginPath();
+            this.ctx.arc(this.cursor.x, this.cursor.y, 20, 0, Math.PI * 2);
+            this.ctx.stroke();
         }
         
         // Draw crosshair
@@ -944,17 +963,21 @@ class Game {
         
         const enemy = {
             x: x,
-            y: groundY - 40, // Place on top of terrain
-            width: 30, // Increased hitbox size
-            height: 50, // Increased hitbox size
+            y: groundY - 40,
+            width: 30,
+            height: 50,
             shootTimer: 0,
             shootInterval: 60 + Math.random() * 60,
             isDying: false,
             deathTimer: 0,
             rotation: 0,
             speedY: 0,
+            speedX: -1 - Math.random(), // Random horizontal speed
+            movementTimer: 0,
+            movementInterval: 120 + Math.random() * 60, // Random movement change interval
             canShoot: true,
-            color: '#ff0000'
+            color: '#ff0000',
+            jumpForce: -8 - Math.random() * 4 // Random jump force
         };
         this.enemies.push(enemy);
     }
@@ -963,6 +986,31 @@ class Game {
         this.enemies = this.enemies.filter(enemy => {
             // Remove enemies that are too far behind
             if (enemy.x < this.viewportX - 200) return false;
+
+            // Update movement
+            enemy.movementTimer++;
+            if (enemy.movementTimer >= enemy.movementInterval) {
+                enemy.movementTimer = 0;
+                enemy.speedX = -1 - Math.random() * 2; // New random speed
+                if (Math.random() < 0.3) { // 30% chance to jump
+                    const groundHeight = this.getGroundHeight(enemy.x);
+                    if (Math.abs(enemy.y - (groundHeight - enemy.height)) < 5) {
+                        enemy.speedY = enemy.jumpForce;
+                    }
+                }
+            }
+
+            // Apply movement
+            enemy.x += enemy.speedX;
+            enemy.y += enemy.speedY;
+            enemy.speedY += 0.5; // Gravity
+
+            // Check ground collision
+            const groundHeight = this.getGroundHeight(enemy.x);
+            if (enemy.y >= groundHeight - enemy.height) {
+                enemy.y = groundHeight - enemy.height;
+                enemy.speedY = 0;
+            }
 
             // Shoot at player
             enemy.shootTimer++;
@@ -1148,35 +1196,43 @@ class Game {
         return t >= 0 && t <= 1 && u >= 0 && u <= 1;
     }
 
-    throwGrenade() {
+    throwChargedGrenade() {
+        const dx = this.cursor.x - (this.player.x - this.viewportX);
+        const dy = this.cursor.y - this.player.y;
+        const angle = Math.atan2(dy, dx);
+        const power = 15; // Base throw power
+        
         this.grenades.push({
             x: this.player.x,
             y: this.player.y,
-            speedY: -8,
-            speedX: this.player.speedX * 0.5,
-            exploded: false
+            speedX: Math.cos(angle) * power,
+            speedY: Math.sin(angle) * power,
+            exploded: false,
+            isCharged: true
         });
     }
 
-    createGrenadeExplosion(x, y) {
+    createGrenadeExplosion(x, y, isCharged = false) {
         // Create explosion particles
-        for (let i = 0; i < 50; i++) {
-            const angle = (Math.PI * 2 * i) / 50;
-            const speed = 5 + Math.random() * 7;
+        const particleCount = isCharged ? 200 : 50;
+        for (let i = 0; i < particleCount; i++) {
+            const angle = (Math.PI * 2 * i) / particleCount;
+            const speed = isCharged ? (10 + Math.random() * 15) : (5 + Math.random() * 7);
             this.particles.push({
                 x: x,
                 y: y,
                 dx: Math.cos(angle) * speed,
                 dy: Math.sin(angle) * speed - 3,
-                life: 80,
-                color: '#FF4400',
-                size: 4 + Math.random() * 4
+                life: isCharged ? 120 : 80,
+                color: isCharged ? '#FF0000' : '#FF4400',
+                size: isCharged ? (8 + Math.random() * 8) : (4 + Math.random() * 4)
             });
         }
 
         // Create deep hole in terrain
-        const holeWidth = this.grenadeWidth * this.worldWidth / this.canvas.width;
-        const holeDepth = this.grenadeRadius;
+        const multiplier = isCharged ? this.chargedGrenadeMultiplier : 1;
+        const holeWidth = this.grenadeWidth * this.worldWidth / this.canvas.width * multiplier;
+        const holeDepth = this.grenadeRadius * multiplier;
         
         for (let i = 0; i < this.terrain.length; i++) {
             const point = this.terrain[i];
