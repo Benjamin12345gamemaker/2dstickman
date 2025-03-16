@@ -131,23 +131,23 @@ class Game {
             speedX: 0,
             speedY: 0,
             maxSpeedX: 8,
-            acceleration: 0.8,    // Reduced for better ship control
-            friction: .95,      // Increased friction to prevent excessive gliding
-            gravity: 0.6,        // Reduced gravity for better jump control
-            jumpForce: -12,      // Adjusted jump force
+            acceleration: 0.5,    // Reduced from 0.8 for smoother acceleration
+            friction: 0.92,      // Adjusted for smoother deceleration
+            gravity: 0.5,        // Reduced for smoother vertical movement
+            jumpForce: -10,      // Adjusted for smoother jumps
             canJump: true,
-            doubleJump: true,    // Added double jump
+            doubleJump: true,
             isSliding: false,
             rotation: 0,
             gunAngle: 0,
             forcedSlide: false,
             canFly: true,
-            flyingSpeed: -6,
-            descendSpeed: 3,
+            flyingSpeed: -5,     // Reduced for smoother flying
+            descendSpeed: 2.5,   // Reduced for smoother descent
             isDead: false,
             capeAnimation: 0,
-            flyingAcceleration: 0.45,
-            maxFlySpeed: 12,
+            flyingAcceleration: 0.3, // Reduced for smoother flying acceleration
+            maxFlySpeed: 10,
             currentFlySpeed: 0,
             maxAmmo: 200,
             ammo: 200,
@@ -159,6 +159,10 @@ class Game {
             dashDuration: 15,
             dashSpeed: 90,
             lastWKeyState: false,
+            // Add smoothing properties
+            targetX: 100,
+            targetY: initialGroundHeight - 40,
+            smoothingFactor: 0.2 // How quickly to move toward target position
         };
 
         // Add weapon properties
@@ -189,10 +193,16 @@ class Game {
                 color: '#4488ff'
             },
             minigun: {
-                shootInterval: 50, // Faster than rifle
+                shootInterval: 50,
                 bulletSpeed: 60,
                 spread: 0.3,
                 color: '#FFD700'
+            },
+            landmine: {
+                shootInterval: 1000,
+                throwForce: 15,
+                explosionRadius: 300, // 50 meters
+                color: '#FF0000'
             }
         };
 
@@ -222,7 +232,8 @@ class Game {
             d: false,
             e: false,
             '9': false,
-            q: false
+            q: false,
+            '8': false
         };
 
         // Terrain destruction properties
@@ -368,6 +379,251 @@ class Game {
 
         // Set cursor properties
         this.canvas.style.cursor = 'none';
+
+        // Add landmine array
+        this.landmines = [];
+
+        // Add mobile control properties
+        this.mobileControls = {
+            joystick: {
+                active: false,
+                startX: 0,
+                startY: 0,
+                currentX: 0,
+                currentY: 0,
+                maxDistance: 50, // Maximum joystick distance
+                baseRadius: 40,  // Size of joystick base
+                knobRadius: 20   // Size of joystick knob
+            },
+            shootButton: {
+                x: 0,
+                y: 0,
+                radius: 40,
+                pressed: false
+            },
+            jumpButton: {
+                x: 0,
+                y: 0,
+                radius: 30,
+                pressed: false
+            },
+            flyButton: {
+                x: 0,
+                y: 0,
+                radius: 35,
+                pressed: false
+            },
+            weaponButton: {
+                x: 0,
+                y: 0,
+                radius: 30,
+                pressed: false
+            },
+            tiltControls: {
+                enabled: true,
+                sensitivity: 5,
+                tiltX: 0
+            }
+        };
+
+        // Add touch event listeners
+        this.canvas.addEventListener('touchstart', this.handleTouchStart.bind(this));
+        this.canvas.addEventListener('touchmove', this.handleTouchMove.bind(this));
+        this.canvas.addEventListener('touchend', this.handleTouchEnd.bind(this));
+        
+        // Add device orientation event listener for tilt controls
+        if (window.DeviceOrientationEvent) {
+            window.addEventListener('deviceorientation', this.handleDeviceOrientation.bind(this));
+        }
+        
+        // Detect if running on mobile
+        this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    }
+
+    handleDeviceOrientation(event) {
+        if (!this.isMobile || !this.mobileControls.tiltControls.enabled) return;
+        
+        // Get gamma (left-right tilt)
+        const gamma = event.gamma; // Range: -90 to 90
+        
+        // Normalize to a value between -1 and 1 with a dead zone
+        if (Math.abs(gamma) < 5) {
+            this.mobileControls.tiltControls.tiltX = 0; // Dead zone for stability
+        } else {
+            this.mobileControls.tiltControls.tiltX = gamma / 45; // Normalize to -1 to 1
+            
+            // Clamp to range -1 to 1
+            if (this.mobileControls.tiltControls.tiltX > 1) this.mobileControls.tiltControls.tiltX = 1;
+            if (this.mobileControls.tiltControls.tiltX < -1) this.mobileControls.tiltControls.tiltX = -1;
+        }
+    }
+
+    handleTouchStart(event) {
+        event.preventDefault();
+        const rect = this.canvas.getBoundingClientRect();
+
+        // Handle death screen buttons on mobile
+        if (this.player.isDead) {
+            for (const touch of event.touches) {
+                const x = touch.clientX - rect.left;
+                const y = touch.clientY - rect.top;
+                
+                // Check retry button
+                if (this.retryButton && 
+                    x >= this.retryButton.x && 
+                    x <= this.retryButton.x + this.retryButton.width &&
+                    y >= this.retryButton.y && 
+                    y <= this.retryButton.y + this.retryButton.height) {
+                    // Retry with same character
+                    const wasSpaceship = this.isSpaceship;
+                    this.restartGame();
+                    this.isSpaceship = wasSpaceship;
+                    this.gameStarted = true;
+                    this.audio.play('weaponSwitch');
+                    return;
+                }
+                
+                // Check quit button
+                if (this.quitButton && 
+                    x >= this.quitButton.x && 
+                    x <= this.quitButton.x + this.quitButton.width &&
+                    y >= this.quitButton.y && 
+                    y <= this.quitButton.y + this.quitButton.height) {
+                    // Return to start screen
+                    this.restartGame();
+                    this.gameStarted = false;
+                    this.showCharacterSelect = false;
+                    this.audio.play('weaponSwitch');
+                    return;
+                }
+            }
+            return;
+        }
+
+        for (const touch of event.touches) {
+            const x = touch.clientX - rect.left;
+            const y = touch.clientY - rect.top;
+
+            // Left side of screen is for joystick (if not using tilt)
+            if (x < this.canvas.width / 2 && !this.mobileControls.tiltControls.enabled) {
+                this.mobileControls.joystick.active = true;
+                this.mobileControls.joystick.startX = x;
+                this.mobileControls.joystick.startY = y;
+                this.mobileControls.joystick.currentX = x;
+                this.mobileControls.joystick.currentY = y;
+            } else {
+                // Right side touches for buttons
+                // Check shoot button
+                const shootDist = Math.hypot(
+                    x - this.mobileControls.shootButton.x,
+                    y - this.mobileControls.shootButton.y
+                );
+                if (shootDist < this.mobileControls.shootButton.radius) {
+                    this.mobileControls.shootButton.pressed = true;
+                    this.mouseDown = true;
+                }
+
+                // Check jump button
+                const jumpDist = Math.hypot(
+                    x - this.mobileControls.jumpButton.x,
+                    y - this.mobileControls.jumpButton.y
+                );
+                if (jumpDist < this.mobileControls.jumpButton.radius) {
+                    this.mobileControls.jumpButton.pressed = true;
+                    this.keys.w = true;
+                }
+
+                // Check fly button
+                const flyDist = Math.hypot(
+                    x - this.mobileControls.flyButton.x,
+                    y - this.mobileControls.flyButton.y
+                );
+                if (flyDist < this.mobileControls.flyButton.radius) {
+                    this.mobileControls.flyButton.pressed = true;
+                    this.keys.w = true;
+                }
+
+                // Check weapon switch button
+                const weaponDist = Math.hypot(
+                    x - this.mobileControls.weaponButton.x,
+                    y - this.mobileControls.weaponButton.y
+                );
+                if (weaponDist < this.mobileControls.weaponButton.radius) {
+                    this.mobileControls.weaponButton.pressed = true;
+                    this.cycleWeapons();
+                }
+            }
+        }
+    }
+
+    handleTouchMove(event) {
+        event.preventDefault();
+        const rect = this.canvas.getBoundingClientRect();
+
+        for (const touch of event.touches) {
+            const x = touch.clientX - rect.left;
+            const y = touch.clientY - rect.top;
+
+            if (x < this.canvas.width / 2 && this.mobileControls.joystick.active && !this.mobileControls.tiltControls.enabled) {
+                // Update joystick position
+                const dx = x - this.mobileControls.joystick.startX;
+                const dy = y - this.mobileControls.joystick.startY;
+                const distance = Math.hypot(dx, dy);
+
+                if (distance > this.mobileControls.joystick.maxDistance) {
+                    const angle = Math.atan2(dy, dx);
+                    this.mobileControls.joystick.currentX = 
+                        this.mobileControls.joystick.startX + 
+                        Math.cos(angle) * this.mobileControls.joystick.maxDistance;
+                    this.mobileControls.joystick.currentY = 
+                        this.mobileControls.joystick.startY + 
+                        Math.sin(angle) * this.mobileControls.joystick.maxDistance;
+                } else {
+                    this.mobileControls.joystick.currentX = x;
+                    this.mobileControls.joystick.currentY = y;
+                }
+
+                // Update movement keys based on joystick position
+                const normalizedX = dx / this.mobileControls.joystick.maxDistance;
+                const normalizedY = dy / this.mobileControls.joystick.maxDistance;
+                
+                this.keys.a = normalizedX < -0.3;
+                this.keys.d = normalizedX > 0.3;
+                this.keys.s = normalizedY > 0.3;
+            }
+        }
+    }
+
+    handleTouchEnd(event) {
+        event.preventDefault();
+        
+        // Check if all touches are gone
+        if (event.touches.length === 0) {
+            // Reset joystick
+            this.mobileControls.joystick.active = false;
+            
+            // Reset movement keys
+            this.keys.a = false;
+            this.keys.d = false;
+            this.keys.s = false;
+            
+            // Reset buttons
+            this.mobileControls.shootButton.pressed = false;
+            this.mobileControls.jumpButton.pressed = false;
+            this.mobileControls.flyButton.pressed = false;
+            this.mobileControls.weaponButton.pressed = false;
+            this.mouseDown = false;
+            this.keys.w = false;
+        }
+    }
+
+    cycleWeapons() {
+        const weapons = ['rifle', 'shotgun', 'sniper', 'landmine'];
+        const currentIndex = weapons.indexOf(this.player.currentWeapon);
+        const nextIndex = (currentIndex + 1) % weapons.length;
+        this.player.currentWeapon = weapons[nextIndex];
+        this.shootInterval = this.weapons[this.player.currentWeapon].shootInterval;
+        this.audio.play('weaponSwitch');
     }
 
     resizeCanvas() {
@@ -512,6 +768,11 @@ class Game {
                     this.shop.isOpen = !this.shop.isOpen;
                 }
                 break;
+            case '8':
+                this.audio.play('weaponSwitch');
+                this.player.currentWeapon = 'landmine';
+                this.shootInterval = this.weapons.landmine.shootInterval;
+                break;
         }
     }
 
@@ -530,18 +791,20 @@ class Game {
     }
 
     handleMouseMove(event) {
-        const rect = this.canvas.getBoundingClientRect();
-        const mouseX = event.clientX - rect.left;
-        const mouseY = event.clientY - rect.top;
-        
-        // Update cursor position
-        this.cursor.x = mouseX;
-        this.cursor.y = mouseY;
-        
-        // Calculate angle between player and mouse
-        const dx = mouseX - (this.player.x - this.viewportX + 10);
-        const dy = mouseY - (this.player.y + 20);
-        this.player.gunAngle = Math.atan2(dy, dx);
+        if (!this.isMobile) {
+            const rect = this.canvas.getBoundingClientRect();
+            const mouseX = event.clientX - rect.left;
+            const mouseY = event.clientY - rect.top;
+            
+            // Update cursor position
+            this.cursor.x = mouseX;
+            this.cursor.y = mouseY;
+            
+            // Calculate angle between player and mouse
+            const dx = mouseX - (this.player.x - this.viewportX + 10);
+            const dy = mouseY - (this.player.y + 20);
+            this.player.gunAngle = Math.atan2(dy, dx);
+        }
     }
 
     handleMouseDown(event) {
@@ -586,20 +849,40 @@ class Game {
             return;
         }
 
-        // Check for retry button click on death or victory screen
-        if ((this.player.isDead || this.gameState.gameWon) && this.retryButton) {
+        // Check for retry or quit button click on death screen
+        if (this.player.isDead) {
             const mouseX = event.clientX - this.canvas.getBoundingClientRect().left;
             const mouseY = event.clientY - this.canvas.getBoundingClientRect().top;
 
-            if (mouseX >= this.retryButton.x && 
+            // Check retry button
+            if (this.retryButton && 
+                mouseX >= this.retryButton.x && 
                 mouseX <= this.retryButton.x + this.retryButton.width &&
                 mouseY >= this.retryButton.y && 
                 mouseY <= this.retryButton.y + this.retryButton.height) {
+                // Retry with same character
+                const wasSpaceship = this.isSpaceship;
+                this.restartGame();
+                this.isSpaceship = wasSpaceship;
+                this.gameStarted = true;
+                this.audio.play('weaponSwitch');
+                return;
+            }
+            
+            // Check quit button
+            if (this.quitButton && 
+                mouseX >= this.quitButton.x && 
+                mouseX <= this.quitButton.x + this.quitButton.width &&
+                mouseY >= this.quitButton.y && 
+                mouseY <= this.quitButton.y + this.quitButton.height) {
+                // Return to start screen
                 this.restartGame();
                 this.gameStarted = false;
                 this.showCharacterSelect = false;
+                this.audio.play('weaponSwitch');
                 return;
             }
+            return;
         }
 
         // Original mouse down logic
@@ -628,13 +911,26 @@ class Game {
         const currentTime = Date.now();
         const weapon = this.weapons[this.player.currentWeapon];
         
-        if (currentTime - this.lastShotTime >= weapon.shootInterval && this.player.ammo > 0) {
+        if (currentTime - this.lastShotTime >= weapon.shootInterval) {
             // Calculate direction to cursor
             const dx = this.cursor.x - (this.player.x - this.viewportX);
             const dy = this.cursor.y - this.player.y;
             const angle = Math.atan2(dy, dx);
             
-            if (this.player.currentWeapon === 'launchGun') {
+            if (this.player.currentWeapon === 'landmine') {
+                // Create and throw the landmine
+                this.landmines.push({
+                    x: this.player.x,
+                    y: this.player.y,
+                    speedX: Math.cos(angle) * weapon.throwForce,
+                    speedY: Math.sin(angle) * weapon.throwForce - 5, // Add slight upward boost
+                    width: 20,
+                    height: 10,
+                    armed: false,
+                    armDelay: 60 // 1 second delay before arming
+                });
+                this.audio.play('shoot');
+            } else if (this.player.currentWeapon === 'launchGun') {
                 // ... existing launchGun code ...
             }
             else if (this.player.currentWeapon === 'shotgun') {
@@ -801,9 +1097,12 @@ class Game {
             this.player.isDead = true;
         }
 
+        // Check if player health is zero or below
+        if (this.player.health <= 0) {
+            this.player.isDead = true;
+        }
+
         if (this.player.isDead) {
-            this.audio.play('death');
-            this.restartGame();
             return;
         }
 
@@ -995,69 +1294,75 @@ class Game {
                 this.player.speedX *= 0.99;
                 this.player.speedY *= 0.99;
             } else {
-            this.player.speedX *= this.player.friction;
-            this.player.speedY *= this.player.friction;
+                this.player.speedX *= this.player.friction;
+                this.player.speedY *= this.player.friction;
             }
 
             // Cap speed at 45 for both directions
             const currentSpeed = Math.sqrt(this.player.speedX * this.player.speedX + this.player.speedY * this.player.speedY);
-            if (currentSpeed > 122) {  // Changed from 61 to 122 (2x faster)
+            if (currentSpeed > 122) {
                 const angle = Math.atan2(this.player.speedY, this.player.speedX);
-                this.player.speedX = Math.cos(angle) * 122;  // Changed from 61 to 122
-                this.player.speedY = Math.sin(angle) * 122;  // Changed from 61 to 122
+                this.player.speedX = Math.cos(angle) * 122;
+                this.player.speedY = Math.sin(angle) * 122;
             }
+            
+            // Apply smoothing to position updates
+            this.player.x += this.player.speedX;
+            this.player.y += this.player.speedY;
         } else {
-            // Stick figure movement - affected by gravity
+            // Stick figure movement - platformer style
+            // Horizontal movement
             if (this.keys.d) {
-                this.player.speedX = Math.min(this.player.speedX + this.player.acceleration, this.player.maxSpeedX);
+                // Gradually increase speed for smoother acceleration
+                this.player.speedX += this.player.acceleration;
+                if (this.player.speedX > this.player.maxSpeedX) {
+                    this.player.speedX = this.player.maxSpeedX;
+                }
             }
-            if (this.keys.a) {
-                this.player.speedX = Math.max(this.player.speedX - this.player.acceleration, -this.player.maxSpeedX);
+            else if (this.keys.a) {
+                // Gradually increase speed for smoother acceleration
+                this.player.speedX -= this.player.acceleration;
+                if (this.player.speedX < -this.player.maxSpeedX) {
+                    this.player.speedX = -this.player.maxSpeedX;
+                }
             }
-            if (!this.keys.a && !this.keys.d) {
-                // Apply friction to gradually slow down
+            else {
+                // Apply friction when no keys are pressed
                 this.player.speedX *= this.player.friction;
+                
+                // Stop completely if speed is very low to prevent tiny movements
+                if (Math.abs(this.player.speedX) < 0.1) {
+                    this.player.speedX = 0;
+                }
             }
             
             // Apply gravity
             this.player.speedY += this.player.gravity;
             
-            // Get ground height for collision
-            const groundHeight = this.getGroundHeight(this.player.x);
-            
-            // Check ground collision with proper hitbox
-            if (this.player.y + this.player.height >= groundHeight) {
-                this.player.y = groundHeight - this.player.height;
-                this.player.speedY = 0;
-                this.player.canJump = true;
-                this.player.doubleJump = true;
-            }
-            
-            // Handle initial jump and double jump (only on key press)
-            if (this.keys.w && this.player.lastWKeyState === false) {
-                if (this.player.canJump) {
-                    this.player.speedY = this.player.jumpForce;
-                    this.player.canJump = false;
-                    this.audio.play('jump');
-                } else if (this.player.doubleJump) {
-                    this.player.speedY = this.player.jumpForce * 0.8; // Slightly weaker double jump
-                    this.player.doubleJump = false;
-                    this.audio.play('jump');
+            // Apply flying if W key is pressed and can fly
+            if (this.keys.w && this.player.canFly) {
+                // Gradually increase flying speed for smoother acceleration
+                this.player.currentFlySpeed += this.player.flyingAcceleration;
+                if (this.player.currentFlySpeed > this.player.maxFlySpeed) {
+                    this.player.currentFlySpeed = this.player.maxFlySpeed;
                 }
-            }
-            
-            // Jetpack functionality when holding W (after initial jump)
-            if (this.keys.w && !this.player.canJump && !this.isSpaceship) {
-                // Apply upward force
-                this.player.speedY = Math.max(this.player.speedY - 1.2, -8); // Cap upward speed
                 
-                // Create jetpack particles
+                this.player.speedY = -this.player.currentFlySpeed;
+                
+                // Play flying sound at intervals
+                const currentTime = Date.now();
+                if (currentTime - this.lastFlySound > 500) {
+                    this.audio.play('fly');
+                    this.lastFlySound = currentTime;
+                }
+                
+                // Create jetpack flame particles
                 for (let i = 0; i < 3; i++) {
                     const spread = (Math.random() - 0.5) * 0.5;
                     const speed = 3 + Math.random() * 4;
                     this.particles.push({
                         x: this.player.x,
-                        y: this.player.y + this.player.height - 10,
+                        y: this.player.y + this.player.height/2,
                         dx: Math.cos(Math.PI/2 + spread) * speed,
                         dy: Math.sin(Math.PI/2 + spread) * speed,
                         life: 15 + Math.random() * 10,
@@ -1065,13 +1370,40 @@ class Game {
                         size: 2 + Math.random() * 2
                     });
                 }
-                
-                // Play jetpack sound
-                this.audio.play('fly');
+            }
+            else {
+                // Reset flying speed when not flying
+                this.player.currentFlySpeed = 0;
             }
             
-            // Store current W key state for next frame
-            this.player.lastWKeyState = this.keys.w;
+            // Apply movement
+            this.player.x += this.player.speedX;
+            this.player.y += this.player.speedY;
+            
+            // Check ground collision
+            const groundHeight = this.getGroundHeight(this.player.x);
+            if (this.player.y >= groundHeight - this.player.height / 2) {
+                this.player.y = groundHeight - this.player.height / 2;
+                this.player.speedY = 0;
+                this.player.canJump = true;
+                this.player.doubleJump = true;
+                
+                // Check if on a slope
+                const groundAngle = this.getTerrainAngle(this.player.x);
+                if (Math.abs(groundAngle) > 0.3) {
+                    this.player.isSliding = true;
+                    
+                    // Apply sliding force based on angle
+                    const slideForce = Math.sin(groundAngle) * 0.5;
+                    this.player.speedX += slideForce;
+                }
+                else {
+                    this.player.isSliding = false;
+                }
+            }
+            else {
+                this.player.isSliding = false;
+            }
         }
 
         // Calculate new position
@@ -1370,6 +1702,77 @@ class Game {
             if (this.shop.timeRemaining <= 0) {
                 this.shop.isOpen = false;
                 this.shop.canOpen = false;
+            }
+        }
+
+        // Update landmines
+        this.landmines = this.landmines.filter(mine => {
+            // Apply gravity and movement
+            mine.speedY += 0.5;
+            mine.x += mine.speedX;
+            mine.y += mine.speedY;
+
+            // Check ground collision
+            const groundHeight = this.getGroundHeight(mine.x);
+            if (mine.y >= groundHeight - mine.height) {
+                mine.y = groundHeight - mine.height;
+                mine.speedX = 0;
+                mine.speedY = 0;
+                if (mine.armDelay > 0) {
+                    mine.armDelay--;
+                } else {
+                    mine.armed = true;
+                }
+            }
+
+            // Check if armed mine is triggered by any entity
+            if (mine.armed) {
+                // Check player collision
+                if (this.checkCollision(mine, {
+                    x: this.player.x - this.player.width/2,
+                    y: this.player.y - this.player.height/2,
+                    width: this.player.width,
+                    height: this.player.height
+                })) {
+                    this.createLandmineExplosion(mine.x, mine.y);
+                    return false;
+                }
+
+                // Check enemy collisions
+                for (const enemy of this.enemies) {
+                    if (this.checkCollision(mine, enemy)) {
+                        this.createLandmineExplosion(mine.x, mine.y);
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        });
+
+        // Apply tilt controls for mobile
+        if (this.isMobile && this.mobileControls.tiltControls.enabled && this.gameStarted) {
+            const tiltX = this.mobileControls.tiltControls.tiltX;
+            
+            // Apply left/right movement based on tilt
+            if (tiltX > 0.1) {
+                this.keys.d = true;
+                this.keys.a = false;
+                this.player.speedX += this.player.acceleration * (tiltX * this.mobileControls.tiltControls.sensitivity);
+            } else if (tiltX < -0.1) {
+                this.keys.a = true;
+                this.keys.d = false;
+                this.player.speedX += this.player.acceleration * (tiltX * this.mobileControls.tiltControls.sensitivity);
+            } else {
+                this.keys.a = false;
+                this.keys.d = false;
+            }
+            
+            // Cap horizontal speed
+            if (this.player.speedX > this.player.maxSpeedX) {
+                this.player.speedX = this.player.maxSpeedX;
+            } else if (this.player.speedX < -this.player.maxSpeedX) {
+                this.player.speedX = -this.player.maxSpeedX;
             }
         }
     }
@@ -1983,6 +2386,145 @@ class Game {
             
             this.ctx.textAlign = 'left';
         }
+
+        // Draw mobile controls if on mobile device
+        if (this.isMobile) {
+            // Draw joystick if not using tilt controls
+            if (!this.mobileControls.tiltControls.enabled && this.mobileControls.joystick.active) {
+                // Draw base
+                this.ctx.beginPath();
+                this.ctx.arc(
+                    this.mobileControls.joystick.startX,
+                    this.mobileControls.joystick.startY,
+                    this.mobileControls.joystick.baseRadius,
+                    0, Math.PI * 2
+                );
+                this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                this.ctx.stroke();
+
+                // Draw knob
+                this.ctx.beginPath();
+                this.ctx.arc(
+                    this.mobileControls.joystick.currentX,
+                    this.mobileControls.joystick.currentY,
+                    this.mobileControls.joystick.knobRadius,
+                    0, Math.PI * 2
+                );
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                this.ctx.fill();
+            }
+
+            // Position the buttons on the right side
+            this.mobileControls.shootButton.x = this.canvas.width - 80;
+            this.mobileControls.shootButton.y = this.canvas.height - 100;
+            
+            this.mobileControls.jumpButton.x = this.canvas.width - 160;
+            this.mobileControls.jumpButton.y = this.canvas.height - 100;
+            
+            this.mobileControls.flyButton.x = this.canvas.width - 120;
+            this.mobileControls.flyButton.y = this.canvas.height - 180;
+            
+            this.mobileControls.weaponButton.x = this.canvas.width - 80;
+            this.mobileControls.weaponButton.y = this.canvas.height - 260;
+
+            // Draw shoot button
+            this.ctx.beginPath();
+            this.ctx.arc(
+                this.mobileControls.shootButton.x,
+                this.mobileControls.shootButton.y,
+                this.mobileControls.shootButton.radius,
+                0, Math.PI * 2
+            );
+            this.ctx.fillStyle = this.mobileControls.shootButton.pressed ? 
+                'rgba(255, 0, 0, 0.7)' : 'rgba(255, 0, 0, 0.5)';
+            this.ctx.fill();
+            this.ctx.fillStyle = '#fff';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText('SHOOT', this.mobileControls.shootButton.x, 
+                this.mobileControls.shootButton.y);
+
+            // Draw jump button
+            this.ctx.beginPath();
+            this.ctx.arc(
+                this.mobileControls.jumpButton.x,
+                this.mobileControls.jumpButton.y,
+                this.mobileControls.jumpButton.radius,
+                0, Math.PI * 2
+            );
+            this.ctx.fillStyle = this.mobileControls.jumpButton.pressed ? 
+                'rgba(0, 255, 0, 0.7)' : 'rgba(0, 255, 0, 0.5)';
+            this.ctx.fill();
+            this.ctx.fillStyle = '#fff';
+            this.ctx.fillText('JUMP', this.mobileControls.jumpButton.x, 
+                this.mobileControls.jumpButton.y);
+
+            // Draw fly button
+            this.ctx.beginPath();
+            this.ctx.arc(
+                this.mobileControls.flyButton.x,
+                this.mobileControls.flyButton.y,
+                this.mobileControls.flyButton.radius,
+                0, Math.PI * 2
+            );
+            this.ctx.fillStyle = this.mobileControls.flyButton.pressed ? 
+                'rgba(255, 165, 0, 0.7)' : 'rgba(255, 165, 0, 0.5)';
+            this.ctx.fill();
+            this.ctx.fillStyle = '#fff';
+            this.ctx.fillText('FLY', this.mobileControls.flyButton.x, 
+                this.mobileControls.flyButton.y);
+
+            // Draw weapon switch button
+            this.ctx.beginPath();
+            this.ctx.arc(
+                this.mobileControls.weaponButton.x,
+                this.mobileControls.weaponButton.y,
+                this.mobileControls.weaponButton.radius,
+                0, Math.PI * 2
+            );
+            this.ctx.fillStyle = this.mobileControls.weaponButton.pressed ? 
+                'rgba(0, 0, 255, 0.7)' : 'rgba(0, 0, 255, 0.5)';
+            this.ctx.fill();
+            this.ctx.fillStyle = '#fff';
+            this.ctx.fillText('WEAPON', this.mobileControls.weaponButton.x, 
+                this.mobileControls.weaponButton.y);
+
+            // Draw tilt indicator
+            if (this.mobileControls.tiltControls.enabled) {
+                const tiltX = this.mobileControls.tiltControls.tiltX;
+                const indicatorWidth = 150;
+                const indicatorHeight = 20;
+                const indicatorX = 20;
+                const indicatorY = 100;
+                
+                // Draw background bar
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                this.ctx.fillRect(indicatorX, indicatorY, indicatorWidth, indicatorHeight);
+                
+                // Draw tilt level
+                const tiltLevel = (tiltX + 1) / 2; // Convert from -1,1 to 0,1
+                this.ctx.fillStyle = 'rgba(0, 255, 255, 0.7)';
+                this.ctx.fillRect(
+                    indicatorX, 
+                    indicatorY, 
+                    indicatorWidth * tiltLevel, 
+                    indicatorHeight
+                );
+                
+                // Draw center marker
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                this.ctx.fillRect(
+                    indicatorX + indicatorWidth/2 - 1, 
+                    indicatorY, 
+                    2, 
+                    indicatorHeight
+                );
+                
+                // Draw text
+                this.ctx.fillStyle = '#fff';
+                this.ctx.textAlign = 'left';
+                this.ctx.fillText('TILT', indicatorX, indicatorY - 5);
+            }
+        }
     }
 
     drawWalls() {
@@ -2064,6 +2606,21 @@ class Game {
             this.ctx.arc(screenX, grenade.y, grenade.isCharged ? 8 : 5, 0, Math.PI * 2);
             this.ctx.fill();
         }
+        
+        // Draw landmines
+        this.landmines.forEach(mine => {
+            const screenX = mine.x - this.viewportX;
+            this.ctx.fillStyle = mine.armed ? '#FF0000' : '#888888';
+            this.ctx.fillRect(screenX - mine.width/2, mine.y - mine.height/2, mine.width, mine.height);
+            
+            // Draw arming indicator
+            if (!mine.armed) {
+                this.ctx.fillStyle = '#00FF00';
+                const armingProgress = 1 - (mine.armDelay / 60);
+                this.ctx.fillRect(screenX - mine.width/2, mine.y - mine.height/2 - 5, 
+                    mine.width * armingProgress, 3);
+            }
+        });
         
         this.ctx.restore();
         
@@ -2355,44 +2912,69 @@ class Game {
     }
 
     drawDeathScreen() {
-        // Dark overlay
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        // Create dark overlay
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        // Game Over text
+        
+        // Draw death message
         this.ctx.fillStyle = '#FF0000';
         this.ctx.font = 'bold 72px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'middle';
-        this.ctx.fillText('GAME OVER', this.canvas.width / 2, this.canvas.height / 2 - 50);
-
-        // Stats
+        this.ctx.fillText('YOU DIED', this.canvas.width / 2, this.canvas.height / 3);
+        
+        // Draw stats
         this.ctx.fillStyle = '#FFFFFF';
         this.ctx.font = '24px Arial';
-        this.ctx.fillText(`Distance: ${this.gameState.distance}m`, this.canvas.width / 2, this.canvas.height / 2 + 20);
-        this.ctx.fillText(`Kills: ${this.gameState.killCount}`, this.canvas.width / 2, this.canvas.height / 2 + 50);
-
+        this.ctx.fillText(`Kills: ${this.gameState.killCount}`, this.canvas.width / 2, this.canvas.height / 2 - 30);
+        this.ctx.fillText(`Distance: ${this.gameState.distance}m`, this.canvas.width / 2, this.canvas.height / 2);
+        this.ctx.fillText(`Wave: ${this.waveSystem.currentWave}`, this.canvas.width / 2, this.canvas.height / 2 + 30);
+        
         // Draw retry button
-        const buttonWidth = 200;
-        const buttonHeight = 50;
-        const buttonX = this.canvas.width / 2 - buttonWidth / 2;
-        const buttonY = this.canvas.height / 2 + 100;
-
-        // Button background
-        this.ctx.fillStyle = '#4CAF50';
-        this.ctx.fillRect(buttonX, buttonY, buttonWidth, buttonHeight);
-
-        // Button text
+        const retryButtonWidth = 200;
+        const retryButtonHeight = 60;
+        const retryButtonX = this.canvas.width / 2 - retryButtonWidth - 20;
+        const retryButtonY = this.canvas.height * 0.7;
+        
+        this.ctx.fillStyle = '#00AA00';
+        this.ctx.fillRect(retryButtonX, retryButtonY, retryButtonWidth, retryButtonHeight);
+        this.ctx.strokeStyle = '#FFFFFF';
+        this.ctx.lineWidth = 3;
+        this.ctx.strokeRect(retryButtonX, retryButtonY, retryButtonWidth, retryButtonHeight);
+        
         this.ctx.fillStyle = '#FFFFFF';
-        this.ctx.font = 'bold 24px Arial';
-        this.ctx.fillText('RETRY', this.canvas.width / 2, buttonY + buttonHeight / 2);
-
+        this.ctx.font = 'bold 30px Arial';
+        this.ctx.fillText('RETRY', retryButtonX + retryButtonWidth / 2, retryButtonY + retryButtonHeight / 2 + 10);
+        
+        // Draw quit button
+        const quitButtonWidth = 200;
+        const quitButtonHeight = 60;
+        const quitButtonX = this.canvas.width / 2 + 20;
+        const quitButtonY = this.canvas.height * 0.7;
+        
+        this.ctx.fillStyle = '#AA0000';
+        this.ctx.fillRect(quitButtonX, quitButtonY, quitButtonWidth, quitButtonHeight);
+        this.ctx.strokeStyle = '#FFFFFF';
+        this.ctx.lineWidth = 3;
+        this.ctx.strokeRect(quitButtonX, quitButtonY, quitButtonWidth, quitButtonHeight);
+        
+        this.ctx.fillStyle = '#FFFFFF';
+        this.ctx.font = 'bold 30px Arial';
+        this.ctx.fillText('QUIT', quitButtonX + quitButtonWidth / 2, quitButtonY + quitButtonHeight / 2 + 10);
+        
         // Store button coordinates for click handling
         this.retryButton = {
-            x: buttonX,
-            y: buttonY,
-            width: buttonWidth,
-            height: buttonHeight
+            x: retryButtonX,
+            y: retryButtonY,
+            width: retryButtonWidth,
+            height: retryButtonHeight
+        };
+        
+        this.quitButton = {
+            x: quitButtonX,
+            y: quitButtonY,
+            width: quitButtonWidth,
+            height: quitButtonHeight
         };
     }
 
@@ -2677,10 +3259,10 @@ class Game {
             speedX: 0,
             speedY: 0,
             maxSpeedX: 8,
-            acceleration: 0.8,
-            friction: 0.95,
-            gravity: 0.6,
-            jumpForce: -12,
+            acceleration: 0.5,    // Reduced for smoother acceleration
+            friction: 0.92,      // Adjusted for smoother deceleration
+            gravity: 0.5,        // Reduced for smoother vertical movement
+            jumpForce: -10,      // Adjusted for smoother jumps
             canJump: true,
             doubleJump: true,
             isSliding: false,
@@ -2688,12 +3270,12 @@ class Game {
             gunAngle: 0,
             forcedSlide: false,
             canFly: true,
-            flyingSpeed: -6,
-            descendSpeed: 3,
+            flyingSpeed: -5,     // Reduced for smoother flying
+            descendSpeed: 2.5,   // Reduced for smoother descent
             isDead: false,
             capeAnimation: 0,
-            flyingAcceleration: 0.45,
-            maxFlySpeed: 12,
+            flyingAcceleration: 0.3, // Reduced for smoother flying acceleration
+            maxFlySpeed: 10,
             currentFlySpeed: 0,
             maxAmmo: 200,
             ammo: 200,
@@ -2705,6 +3287,10 @@ class Game {
             dashDuration: 15,
             dashSpeed: 90,
             lastWKeyState: false,
+            // Add smoothing properties
+            targetX: 100,
+            targetY: initialGroundHeight - 40,
+            smoothingFactor: 0.2 // How quickly to move toward target position
         };
 
         // Reset game state
@@ -2750,7 +3336,8 @@ class Game {
             d: false,
             e: false,
             '9': false,
-            q: false
+            q: false,
+            '8': false
         };
         this.mouseDown = false;
         this.isChargingGrenade = false;
@@ -2784,6 +3371,9 @@ class Game {
         this.shop.timeRemaining = 0;
         Object.values(this.shop.items).forEach(item => item.purchased = false);
         this.coins = 0;
+
+        // Reset landmines
+        this.landmines = [];
     }
 
     createBloodEffect(x, y) {
@@ -3276,6 +3866,61 @@ class Game {
         this.isHealing = true;
         this.healingProgress = 0;
         this.audio.play('collect'); // Use collect sound for healing
+    }
+
+    createLandmineExplosion(x, y) {
+        this.audio.play('explosion');
+        
+        // Create explosion particles
+        for (let i = 0; i < 30; i++) {
+            const angle = (Math.PI * 2 * i) / 30;
+            const speed = 2 + Math.random() * 3;
+            this.particles.push({
+                x: x,
+                y: y,
+                dx: Math.cos(angle) * speed,
+                dy: Math.sin(angle) * speed,
+                life: 60,
+                color: '#FF4400',
+                size: 3 + Math.random() * 3
+            });
+        }
+
+        const radius = this.weapons.landmine.explosionRadius;
+
+        // Check for player in blast radius
+        const dx = this.player.x - x;
+        const dy = this.player.y - y;
+        const distanceToPlayer = Math.sqrt(dx * dx + dy * dy);
+        if (distanceToPlayer <= radius) {
+            this.player.isDead = true;
+        }
+
+        // Check for enemies in blast radius
+        this.enemies = this.enemies.filter(enemy => {
+            const dx = enemy.x - x;
+            const dy = enemy.y - y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance <= radius) {
+                enemy.isDying = true;
+                enemy.deathTimer = 0;
+                enemy.speedY = -5;
+                enemy.color = '#000000';
+                enemy.canShoot = false;
+                this.deadEnemies.push(enemy);
+                this.createBloodEffect(enemy.x, enemy.y);
+                this.audio.play('enemyDeath');
+                this.gameState.killCount++;
+                this.waveSystem.waveKills++;
+                this.coins++;
+                return false;
+            }
+            return true;
+        });
+
+        // Create terrain deformation
+        this.deformTerrain(x, y, radius);
     }
 }
 
