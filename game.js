@@ -16,7 +16,8 @@ class AudioManager {
             reload: new Audio('sounds/reload.mp3'),
             weaponSwitch: new Audio('sounds/weapon_switch.mp3'),
             shotgun: new Audio('sounds/shotgun.mp3'),
-            enemyShoot: new Audio('sounds/enemy_shoot.mp3')
+            enemyShoot: new Audio('sounds/enemy_shoot.mp3'),
+            empty: new Audio('sounds/empty.mp3')
         };
 
         // Create sound pools for frequently played sounds
@@ -172,12 +173,14 @@ class Game {
                 bulletSpeed: 75,
                 spread: 25,
                 pellets: 25,
+                ammoUsage: 1
             },
             shotgun: {
                 shootInterval: 500,
                 bulletSpeed: 12,
                 spread: 0.5,
-                pellets: 8
+                pellets: 8,
+                ammoUsage: 1
             },
             sniper: {
                 shootInterval: 1000,
@@ -960,29 +963,26 @@ class Game {
 
     shoot() {
         const currentTime = Date.now();
-        const weapon = this.weapons[this.player.currentWeapon];
         
-        // Check if enough time has passed since last shot
-        if (currentTime - this.lastShotTime >= weapon.shootInterval) {
-            // Calculate direction to cursor
-            const dx = this.cursor.x - (this.player.x - this.viewportX);
-            const dy = this.cursor.y - this.player.y;
-            const angle = Math.atan2(dy, dx);
+        if (currentTime - this.lastShotTime > this.shootInterval) {
+            const weapon = this.weapons[this.player.currentWeapon];
             
-            if (this.player.currentWeapon === 'landmine') {
-                // Create and throw the landmine
-                this.landmines.push({
-                    x: this.player.x,
-                    y: this.player.y,
-                    speedX: Math.cos(angle) * weapon.throwForce,
-                    speedY: Math.sin(angle) * weapon.throwForce - 5, // Add slight upward boost
-                    width: 20,
-                    height: 10,
-                    armed: false,
-                    armDelay: 60 // 1 second delay before arming
-                });
-                this.audio.play('shoot');
-            } else if (this.player.currentWeapon === 'launchGun') {
+            // Check if we have enough ammo
+            if (this.player.ammo < weapon.ammoUsage) {
+                this.audio.play('empty');
+                return;
+            }
+            
+            // Reduce ammo
+            this.player.ammo -= weapon.ammoUsage;
+            
+            // Calculate angle to cursor
+            const angle = this.player.gunAngle;
+            
+            if (this.player.currentWeapon === 'grenade') {
+                this.throwChargedGrenade();
+            }
+            else if (this.player.currentWeapon === 'launchGun') {
                 // ... existing launchGun code ...
             }
             else if (this.player.currentWeapon === 'shotgun') {
@@ -997,8 +997,8 @@ class Game {
                         y: this.player.y,
                         dx: Math.cos(spreadAngle) * weapon.bulletSpeed,
                         dy: Math.sin(spreadAngle) * weapon.bulletSpeed,
-                        life: 30,
-                        color: '#FFFF00'
+                        color: '#FFFF00',
+                        bounceCount: 0 // Initialize bounce counter
                     });
                 }
                 
@@ -1014,8 +1014,8 @@ class Game {
                     y: this.player.y,
                     dx: Math.cos(angle) * weapon.bulletSpeed,
                     dy: Math.sin(angle) * weapon.bulletSpeed,
-                    life: 100,
-                    color: weapon.color || '#00FF00' // Use weapon color if defined
+                    color: weapon.color || '#00FF00', // Use weapon color if defined
+                    bounceCount: 0 // Initialize bounce counter
                 });
                 
                 // Add recoil
@@ -1197,6 +1197,8 @@ class Game {
 
         // Update lasers and check for terrain collision
         this.lasers = this.lasers.filter(laser => {
+            // Remove lifetime check - bullets now travel indefinitely
+            
             // Check wall collisions
             for (let i = this.walls.length - 1; i >= 0; i--) {
                 const wall = this.walls[i];
@@ -1269,53 +1271,55 @@ class Game {
             // Check terrain collision
             const terrainY = this.getGroundHeight(laser.x);
             if (laser.y >= terrainY) {
-                // 25% chance to bounce off the terrain instead of deforming it
-                if (Math.random() < 0.25) {
-                    // Calculate terrain angle for realistic bounce
-                    const terrainAngle = this.getTerrainAngle(laser.x);
-                    const normalAngle = terrainAngle + Math.PI/2;
-                    
-                    // Calculate incoming angle
-                    const incomingAngle = Math.atan2(laser.dy, laser.dx);
-                    
-                    // Calculate reflection angle (mirror across normal)
-                    const reflectionAngle = 2 * normalAngle - incomingAngle;
-                    
-                    // Set new velocity with slight energy loss
-                    const speed = Math.sqrt(laser.dx * laser.dx + laser.dy * laser.dy) * 0.8;
-                    laser.dx = Math.cos(reflectionAngle) * speed;
-                    laser.dy = Math.sin(reflectionAngle) * speed;
-                    
-                    // Move laser slightly above terrain to prevent immediate re-collision
-                    laser.y = terrainY - 2;
-                    
-                    // Create small spark effect
-                    for (let i = 0; i < 3; i++) {
-                        this.particles.push({
-                            x: laser.x,
-                            y: laser.y,
-                            dx: (Math.random() - 0.5) * 2,
-                            dy: (Math.random() - 0.5) * 2 - 1,
-                            life: 10,
-                            color: '#FFFF00',
-                            size: 2
-                        });
-                    }
-                    
-                    // Play bounce sound
-                    this.audio.play('hit');
-                    
-                    return true; // Keep the laser
-                } else {
-                    // Normal behavior: create explosion and deform terrain
-                    this.createExplosion(laser.x, laser.y);
-                    this.deformTerrain(laser.x, laser.y, this.deformationRadius);
-                    return false;
+                // Always bounce off the terrain (100% chance) instead of deforming it
+                // Calculate terrain angle for realistic bounce
+                const terrainAngle = this.getTerrainAngle(laser.x);
+                const normalAngle = terrainAngle + Math.PI/2;
+                
+                // Calculate incoming angle
+                const incomingAngle = Math.atan2(laser.dy, laser.dx);
+                
+                // Calculate reflection angle (mirror across normal)
+                const reflectionAngle = 2 * normalAngle - incomingAngle;
+                
+                // Set new velocity with NO energy loss (maintain full speed)
+                const speed = Math.sqrt(laser.dx * laser.dx + laser.dy * laser.dy);
+                laser.dx = Math.cos(reflectionAngle) * speed;
+                laser.dy = Math.sin(reflectionAngle) * speed;
+                
+                // Ensure the bullet is moving upward after bouncing
+                if (laser.dy > 0) {
+                    laser.dy = -laser.dy; // Force upward direction
                 }
+                
+                // Move laser significantly above terrain to prevent immediate re-collision
+                laser.y = terrainY - 5;
+                
+                // Create more energetic spark effect
+                for (let i = 0; i < 5; i++) {
+                    this.particles.push({
+                        x: laser.x,
+                        y: laser.y,
+                        dx: (Math.random() - 0.5) * 3,
+                        dy: (Math.random() - 0.5) * 3 - 1,
+                        life: 15,
+                        color: '#FFFF00',
+                        size: 2 + Math.random()
+                    });
+                }
+                
+                // Play bounce sound
+                this.audio.play('hit');
+                
+                // Increment bounce counter
+                laser.bounceCount = (laser.bounceCount || 0) + 1;
+                
+                // Allow unlimited bounces
+                return true; // Keep the laser
             }
             
             // Keep laser if it's within a reasonable range of the player
-            return Math.abs(laser.x - this.player.x) < 10000;
+            return Math.abs(laser.x - this.player.x) < 20000; // Increased range to 20000
         });
 
         // Update particles
