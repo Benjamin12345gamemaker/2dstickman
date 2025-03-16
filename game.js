@@ -709,17 +709,68 @@ class Game {
             case '9':
                 break;
             case 'shift': 
-                if (event.location === 2) {
+                if (event.location === 1) { // Left shift (location 1)
                     if (!this.player.isDashing && this.player.dashCooldown <= 0) {
                         this.audio.play('dash');
                         this.player.isDashing = true;
                         this.player.dashCooldown = 60;
+                        
+                        // Determine dash direction based on movement keys
+                        let dashAngle = 0;
+                        let hasMoveDirection = false;
+                        
+                        // Calculate direction based on movement keys
+                        if (this.keys.d && !this.keys.a) {
+                            dashAngle = 0; // Right
+                            hasMoveDirection = true;
+                        } else if (this.keys.a && !this.keys.d) {
+                            dashAngle = Math.PI; // Left
+                            hasMoveDirection = true;
+                        }
+                        
+                        if (this.keys.w && !this.keys.s) {
+                            if (hasMoveDirection) {
+                                // Diagonal up
+                                dashAngle = dashAngle === 0 ? -Math.PI/4 : -3*Math.PI/4;
+                            } else {
+                                dashAngle = -Math.PI/2; // Up
+                                hasMoveDirection = true;
+                            }
+                        } else if (this.keys.s && !this.keys.w) {
+                            if (hasMoveDirection) {
+                                // Diagonal down
+                                dashAngle = dashAngle === 0 ? Math.PI/4 : 3*Math.PI/4;
+                            } else {
+                                dashAngle = Math.PI/2; // Down
+                                hasMoveDirection = true;
+                            }
+                        }
+                        
+                        // If no movement keys are pressed, use the current velocity direction
+                        if (!hasMoveDirection) {
+                            if (Math.abs(this.player.speedX) > 0.1 || Math.abs(this.player.speedY) > 0.1) {
+                                dashAngle = Math.atan2(this.player.speedY, this.player.speedX);
+                            } else {
+                                // If no movement and no velocity, use the crosshair direction as fallback
+                                dashAngle = this.player.gunAngle;
+                            }
+                        }
+                        
+                        // Apply dash velocity
                         const dashSpeed = 15;
-                        this.player.speedX = Math.cos(this.player.gunAngle) * dashSpeed;
-                        this.player.speedY = Math.sin(this.player.gunAngle) * dashSpeed;
+                        this.player.speedX = Math.cos(dashAngle) * dashSpeed;
+                        this.player.speedY = Math.sin(dashAngle) * dashSpeed;
                     }
-                } else {
+                } else if (event.location === 2) { // Right shift (location 2)
+                    // Toggle between full auto and semi auto
                     this.player.isFullAuto = !this.player.isFullAuto;
+                    
+                    // Update UI feedback
+                    const message = this.player.isFullAuto ? 'Full Auto Enabled' : 'Semi Auto Enabled';
+                    console.log(message); // Debug message
+                    
+                    // Play feedback sound
+                    this.audio.play('weaponSwitch');
                 }
                 break;
             case '1':
@@ -911,6 +962,7 @@ class Game {
         const currentTime = Date.now();
         const weapon = this.weapons[this.player.currentWeapon];
         
+        // Check if enough time has passed since last shot
         if (currentTime - this.lastShotTime >= weapon.shootInterval) {
             // Calculate direction to cursor
             const dx = this.cursor.x - (this.player.x - this.viewportX);
@@ -955,14 +1007,15 @@ class Game {
                 this.player.speedY -= Math.sin(angle) * 3;
             }
             else {
-                // Regular weapons (rifle, sniper)
+                // Regular weapons (rifle, sniper, minigun)
                 this.audio.play('shoot');
                 this.lasers.push({
                     x: this.player.x,
                     y: this.player.y,
                     dx: Math.cos(angle) * weapon.bulletSpeed,
                     dy: Math.sin(angle) * weapon.bulletSpeed,
-                    life: 100
+                    life: 100,
+                    color: weapon.color || '#00FF00' // Use weapon color if defined
                 });
                 
                 // Add recoil
@@ -975,24 +1028,51 @@ class Game {
     }
 
     getGroundHeight(x) {
-        for (let i = 0; i < this.terrain.length - 1; i++) {
-            if (x >= this.terrain[i].x && x < this.terrain[i + 1].x) {
-                const t = (x - this.terrain[i].x) / (this.terrain[i + 1].x - this.terrain[i].x);
-                return this.terrain[i].y + t * (this.terrain[i + 1].y - this.terrain[i].y);
+        // Find the terrain point closest to x
+        const worldX = x;
+        
+        // Find the closest terrain points
+        let leftPoint = null;
+        let rightPoint = null;
+        
+        for (const point of this.terrain) {
+            if (point.x <= worldX && (leftPoint === null || point.x > leftPoint.x)) {
+                leftPoint = point;
+            }
+            if (point.x >= worldX && (rightPoint === null || point.x < rightPoint.x)) {
+                rightPoint = point;
             }
         }
-        return 300;
+        
+        // If we don't have both points, return a default height
+        if (!leftPoint || !rightPoint) {
+            return this.canvas.height * 0.8; // Default ground height
+        }
+        
+        // If the points are the same, return that height
+        if (leftPoint === rightPoint) {
+            return leftPoint.y;
+        }
+        
+        // Interpolate between the two points
+        const ratio = (worldX - leftPoint.x) / (rightPoint.x - leftPoint.x);
+        const leftHeight = this.terrainDamage.get(Math.floor(leftPoint.x)) || leftPoint.originalY;
+        const rightHeight = this.terrainDamage.get(Math.floor(rightPoint.x)) || rightPoint.originalY;
+        
+        return leftHeight + ratio * (rightHeight - leftHeight);
     }
-
+    
     getTerrainAngle(x) {
-        for (let i = 0; i < this.terrain.length - 1; i++) {
-            if (x >= this.terrain[i].x && x < this.terrain[i + 1].x) {
-                const dx = this.terrain[i + 1].x - this.terrain[i].x;
-                const dy = this.terrain[i + 1].y - this.terrain[i].y;
-                return Math.atan2(dy, dx);
-            }
-        }
-        return 0;
+        // Find the terrain points to the left and right of x
+        const worldX = x;
+        const sampleDistance = 5; // Distance to sample for calculating angle
+        
+        // Get heights at left and right sample points
+        const leftHeight = this.getGroundHeight(worldX - sampleDistance);
+        const rightHeight = this.getGroundHeight(worldX + sampleDistance);
+        
+        // Calculate angle based on the slope
+        return Math.atan2(rightHeight - leftHeight, sampleDistance * 2);
     }
 
     createExplosion(x, y) {
@@ -1018,12 +1098,9 @@ class Game {
         // Remove viewport offset since x is already in world coordinates
         const worldX = x;
         
-        // Create very small impact dimensions
-        const impactWidth = 10; // Small width for bullet impact
-        const impactDepth = 5;  // Small depth for bullet impact
-        
-        // Calculate the minimum allowed height (indestructible layer)
-        const baseMinHeight = this.canvas.height * (8/9); // Bottom 1/9 is indestructible
+        // Create impact dimensions for a 5-meter deep hole
+        const impactWidth = 5; // Width for bullet impact
+        const impactDepth = 5; // 5 pixels deep (representing 5 meters)
         
         // Find affected terrain points
         for (let i = 0; i < this.terrain.length; i++) {
@@ -1031,43 +1108,37 @@ class Game {
             const dx = point.x - worldX;
             
             if (Math.abs(dx) < impactWidth/2) {
-                // Get current height
-                const currentHeight = this.terrainDamage.get(Math.floor(point.x)) || point.originalY;
+                // Get original height from the point
+                const surfaceHeight = point.originalY;
+                
+                // Get current height (may have been modified by previous shots)
+                const currentHeight = this.terrainDamage.get(Math.floor(point.x)) || surfaceHeight;
                 
                 // Calculate distance from center for smooth impact edges
                 const distanceFromCenter = Math.abs(dx) / (impactWidth/2);
                 
-                // Create a small crater shape
-                const deformation = impactDepth * (1 - distanceFromCenter * distanceFromCenter);
+                // Create a 5-meter deep crater shape
+                // The closer to center, the deeper
+                const deformationAmount = impactDepth * (1 - distanceFromCenter * distanceFromCenter);
                 
-                // Calculate new height with minimal impact
-                let newHeight = currentHeight + deformation;
+                // Calculate new height with 5-meter impact
+                // For terrain, HIGHER y value means LOWER position on screen
+                // So we ADD to y to make a dent downward
+                let newHeight = currentHeight;
                 
-                // Get the original surface height at this point
-                const surfaceHeight = point.originalY;
+                // Only apply deformation if it would make a dent (not a spike)
+                if (deformationAmount > 0) {
+                    newHeight = currentHeight + deformationAmount;
+                }
                 
-                // Define the invincible layer thickness (10 pixels from surface)
-                const invincibleLayerThickness = 10;
-                
-                // If the new height would penetrate the invincible layer, prevent the deformation
-                if (newHeight > surfaceHeight + invincibleLayerThickness) {
-                    // Ensure we don't go below the minimum height
-                    newHeight = Math.max(newHeight, baseMinHeight);
+                // Ensure we never go below original height + impactDepth
+                // This prevents any possibility of deeper holes than intended
+                newHeight = Math.min(newHeight, surfaceHeight + impactDepth);
                 
                 // Store deformation
                 const key = Math.floor(point.x);
                 this.terrainDamage.set(key, newHeight);
                 point.y = newHeight;
-                    
-                    // Smooth transitions between deformed points
-                    if (i > 0) {
-                        const prevPoint = this.terrain[i-1];
-                        const prevHeight = this.terrainDamage.get(Math.floor(prevPoint.x)) || prevPoint.originalY;
-                        const smoothedHeight = (newHeight + prevHeight) / 2;
-                        this.terrainDamage.set(Math.floor(prevPoint.x), smoothedHeight);
-                        prevPoint.y = smoothedHeight;
-                    }
-                }
             }
         }
     }
@@ -1120,7 +1191,7 @@ class Game {
         }
 
         // Handle rapid fire
-        if (this.mouseDown) {
+        if (this.mouseDown && this.player.isFullAuto) {
             this.shoot();
         }
 
@@ -1191,14 +1262,56 @@ class Game {
                 }
             }
 
+            // Move the laser
             laser.x += laser.dx;
             laser.y += laser.dy;
             
+            // Check terrain collision
             const terrainY = this.getGroundHeight(laser.x);
             if (laser.y >= terrainY) {
-                this.createExplosion(laser.x, laser.y);
-                this.deformTerrain(laser.x, laser.y, this.deformationRadius);
-                return false;
+                // 25% chance to bounce off the terrain instead of deforming it
+                if (Math.random() < 0.25) {
+                    // Calculate terrain angle for realistic bounce
+                    const terrainAngle = this.getTerrainAngle(laser.x);
+                    const normalAngle = terrainAngle + Math.PI/2;
+                    
+                    // Calculate incoming angle
+                    const incomingAngle = Math.atan2(laser.dy, laser.dx);
+                    
+                    // Calculate reflection angle (mirror across normal)
+                    const reflectionAngle = 2 * normalAngle - incomingAngle;
+                    
+                    // Set new velocity with slight energy loss
+                    const speed = Math.sqrt(laser.dx * laser.dx + laser.dy * laser.dy) * 0.8;
+                    laser.dx = Math.cos(reflectionAngle) * speed;
+                    laser.dy = Math.sin(reflectionAngle) * speed;
+                    
+                    // Move laser slightly above terrain to prevent immediate re-collision
+                    laser.y = terrainY - 2;
+                    
+                    // Create small spark effect
+                    for (let i = 0; i < 3; i++) {
+                        this.particles.push({
+                            x: laser.x,
+                            y: laser.y,
+                            dx: (Math.random() - 0.5) * 2,
+                            dy: (Math.random() - 0.5) * 2 - 1,
+                            life: 10,
+                            color: '#FFFF00',
+                            size: 2
+                        });
+                    }
+                    
+                    // Play bounce sound
+                    this.audio.play('hit');
+                    
+                    return true; // Keep the laser
+                } else {
+                    // Normal behavior: create explosion and deform terrain
+                    this.createExplosion(laser.x, laser.y);
+                    this.deformTerrain(laser.x, laser.y, this.deformationRadius);
+                    return false;
+                }
             }
             
             // Keep laser if it's within a reasonable range of the player
@@ -1507,9 +1620,9 @@ class Game {
 
         // Handle dashing
         if (this.player.isDashing) {
-            // Use gun angle for dash direction
-            const dashX = Math.cos(this.player.gunAngle) * this.player.dashSpeed;
-            const dashY = Math.sin(this.player.gunAngle) * this.player.dashSpeed;
+            // Use movement direction for dash
+            const dashX = this.player.speedX;
+            const dashY = this.player.speedY;
             
             // Apply dash movement
             const newX = this.player.x + dashX;
@@ -3525,66 +3638,80 @@ class Game {
             return true;
         });
 
-        // Create smaller hole in terrain with reduced impact
-        const multiplier = isCharged ? 0.5 : 0.2; // Reduced from 1.5/0.5 to 0.5/0.2
-        const baseHoleWidth = isCharged ? (this.canvas.width / 96) : (this.canvas.width / 192); // Reduced hole width
+        // Create smoother hole in terrain with reduced impact
+        const multiplier = isCharged ? 0.5 : 0.2;
+        const baseHoleWidth = isCharged ? (this.canvas.width / 48) : (this.canvas.width / 96); // Wider, smoother holes
         const holeWidth = baseHoleWidth * (this.worldWidth / this.canvas.width);
-        const holeDepth = 2 * multiplier; // Reduced from 6 to 2
+        const holeDepth = 2 * multiplier; // Shallow depth for smoother appearance
         
         // Calculate base minimum height (indestructible layer)
         const baseMinHeight = this.canvas.height * (8/9); // Bottom 1/9 is indestructible
         
-        // Generate random slope direction for this explosion
-        const slopeDirection = Math.random() < 0.5 ? -1 : 1;
-        const slopeIntensity = 0.2 + Math.random() * 0.3; // Reduced slope intensity
+        // Use a consistent slope direction for smoother appearance
+        const slopeDirection = 0; // No slope for smoother holes
+        const slopeIntensity = 0.1; // Very minimal slope intensity
+        
+        // First pass: calculate new heights
+        const newHeights = [];
         
         for (let i = 0; i < this.terrain.length; i++) {
             const point = this.terrain[i];
             const dx = point.x - x;
             
             if (Math.abs(dx) < holeWidth) {
-                // Calculate jagged, rounded indestructible layer height
-                const jaggedness = Math.sin(point.x * 0.05) * 20;
-                const noise = Math.sin(point.x * 0.2) * 10;
-                const minHeight = baseMinHeight + jaggedness + noise;
-                
-                // Calculate slope offset based on distance from center
-                const slopeOffset = (dx / holeWidth) * slopeIntensity * 20 * slopeDirection; // Reduced from 40 to 20
-                
-                const distanceFromCenter = Math.abs(dx) / holeWidth;
-                const deformation = holeDepth * (1 - distanceFromCenter * distanceFromCenter);
+                // Use a smooth curve function (cosine) for crater shape
+                const normalizedDist = (dx / holeWidth);
+                // Cosine curve creates a smooth, rounded crater
+                const deformation = holeDepth * (Math.cos(normalizedDist * Math.PI) + 1) / 2;
                 
                 const currentHeight = this.terrainDamage.get(Math.floor(point.x)) || point.originalY;
-                let newHeight = currentHeight + deformation + slopeOffset;
+                let newHeight = currentHeight + deformation;
                 
-                // Ensure we don't go below the jagged minimum height
-                newHeight = Math.max(newHeight, minHeight);
+                // Ensure we don't go below the minimum height
+                newHeight = Math.max(newHeight, baseMinHeight);
                 
-                // Prevent extreme height differences between adjacent points
-                if (i > 0) {
-                    const prevHeight = this.terrain[i-1].y;
-                    const maxDiff = 30; // Reduced from 50 to 30 for smoother transitions
-                    if (Math.abs(newHeight - prevHeight) > maxDiff) {
-                        newHeight = prevHeight + (maxDiff * Math.sign(newHeight - prevHeight));
+                newHeights[i] = newHeight;
+            } else {
+                newHeights[i] = this.terrainDamage.get(Math.floor(point.x)) || point.originalY;
+            }
+        }
+        
+        // Second pass: apply smoothing
+        for (let i = 0; i < this.terrain.length; i++) {
+            const point = this.terrain[i];
+            const dx = point.x - x;
+            
+            if (Math.abs(dx) < holeWidth * 1.2) { // Slightly wider area for smoothing
+                // Apply smoothing by averaging with neighbors
+                let smoothedHeight = newHeights[i];
+                
+                // Average with neighbors for smoothness
+                let neighborCount = 1; // Start with self
+                let neighborSum = smoothedHeight;
+                
+                // Check left neighbors
+                for (let j = 1; j <= 2; j++) {
+                    if (i - j >= 0) {
+                        neighborCount++;
+                        neighborSum += newHeights[i - j];
                     }
                 }
                 
-                const key = Math.floor(point.x);
-                this.terrainDamage.set(key, newHeight);
-                point.y = newHeight;
-                
-                // Add some randomness to nearby points for more natural look
-                if (i > 0 && Math.random() < 0.3) {
-                    const prevPoint = this.terrain[i-1];
-                    const prevHeight = this.terrainDamage.get(Math.floor(prevPoint.x)) || prevPoint.originalY;
-                    const smoothedHeight = (newHeight + prevHeight) / 2 + (Math.random() - 0.5) * 5; // Reduced random variation
-                    const smoothedFinalHeight = Math.max(
-                        baseMinHeight + Math.sin(prevPoint.x * 0.05) * 20 + Math.sin(prevPoint.x * 0.2) * 10,
-                        smoothedHeight
-                    );
-                    this.terrainDamage.set(Math.floor(prevPoint.x), smoothedFinalHeight);
-                    prevPoint.y = smoothedFinalHeight;
+                // Check right neighbors
+                for (let j = 1; j <= 2; j++) {
+                    if (i + j < this.terrain.length) {
+                        neighborCount++;
+                        neighborSum += newHeights[i + j];
+                    }
                 }
+                
+                // Calculate smoothed height
+                smoothedHeight = neighborSum / neighborCount;
+                
+                // Apply the smoothed height
+                const key = Math.floor(point.x);
+                this.terrainDamage.set(key, smoothedHeight);
+                point.y = smoothedHeight;
             }
         }
     }
