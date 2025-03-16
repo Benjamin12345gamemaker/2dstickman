@@ -1,3 +1,136 @@
+// Add at the beginning of the file, before any class definitions
+
+// Multiplayer WebSocket connection
+let socket;
+let playerId;
+let otherPlayers = {};
+let remoteBullets = {};
+let isMultiplayer = true;
+
+// Connect to WebSocket server
+function connectToServer() {
+    // Use secure WebSocket if on HTTPS
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname === '' ? 'localhost' : window.location.hostname;
+    const port = window.location.hostname === '' ? '3000' : window.location.port;
+    const wsUrl = `${protocol}//${host}:${port}`;
+    
+    socket = new WebSocket(wsUrl);
+    
+    socket.onopen = () => {
+        console.log('Connected to server');
+    };
+    
+    socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        switch(data.type) {
+            case 'init':
+                // Initialize player with server-assigned ID
+                playerId = data.id;
+                
+                // Initialize other players
+                Object.keys(data.players).forEach(id => {
+                    if (id !== playerId) {
+                        otherPlayers[id] = data.players[id];
+                    }
+                });
+                
+                // Initialize remote bullets
+                Object.keys(data.bullets).forEach(id => {
+                    remoteBullets[id] = data.bullets[id];
+                });
+                
+                console.log('Initialized with ID:', playerId);
+                break;
+                
+            case 'newPlayer':
+                // Add new player
+                otherPlayers[data.player.id] = data.player;
+                console.log('New player joined:', data.player.id);
+                break;
+                
+            case 'updatePlayer':
+                // Update player position
+                if (otherPlayers[data.player.id]) {
+                    otherPlayers[data.player.id] = data.player;
+                }
+                break;
+                
+            case 'removePlayer':
+                // Remove player
+                if (otherPlayers[data.id]) {
+                    delete otherPlayers[data.id];
+                    console.log('Player left:', data.id);
+                }
+                break;
+                
+            case 'newBullet':
+                // Add new bullet
+                remoteBullets[data.bullet.id] = data.bullet;
+                break;
+                
+            case 'updateBullet':
+                // Update bullet position
+                if (remoteBullets[data.bullet.id]) {
+                    remoteBullets[data.bullet.id] = data.bullet;
+                }
+                break;
+                
+            case 'removeBullet':
+                // Remove bullet
+                if (remoteBullets[data.id]) {
+                    delete remoteBullets[data.id];
+                }
+                break;
+                
+            case 'playerHit':
+                // Player was hit
+                if (data.id === playerId) {
+                    game.player.health = data.health;
+                }
+                break;
+                
+            case 'playerDied':
+                // Player died
+                if (data.id === playerId) {
+                    game.player.isDead = true;
+                    setTimeout(() => {
+                        game.player.isDead = false;
+                    }, 3000);
+                }
+                break;
+                
+            case 'playerRespawn':
+                // Player respawned
+                if (data.player.id === playerId) {
+                    game.player.health = data.player.health;
+                    game.player.x = data.player.x;
+                    game.player.y = data.player.y;
+                    game.player.isDead = false;
+                } else if (otherPlayers[data.player.id]) {
+                    otherPlayers[data.player.id] = data.player;
+                }
+                break;
+        }
+    };
+    
+    socket.onclose = () => {
+        console.log('Disconnected from server');
+        // Try to reconnect after 5 seconds
+        setTimeout(connectToServer, 5000);
+    };
+    
+    socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+    };
+}
+
+// Initialize multiplayer if enabled
+if (isMultiplayer) {
+    connectToServer();
+}
+
 class AudioManager {
     constructor() {
         this.sounds = {
@@ -441,6 +574,9 @@ class Game {
         
         // Detect if running on mobile
         this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+        // Add after this.player initialization in the constructor
+        this.isMultiplayer = isMultiplayer;
     }
 
     handleDeviceOrientation(event) {
@@ -1024,6 +1160,19 @@ class Game {
             }
             
             this.lastShotTime = currentTime;
+        }
+
+        // Add at the end of the shoot method, after creating a laser
+        if (this.isMultiplayer && socket && socket.readyState === WebSocket.OPEN) {
+            // Send bullet data to server
+            socket.send(JSON.stringify({
+                type: 'shoot',
+                x: this.player.x,
+                y: this.player.y,
+                dx: this.lasers[this.lasers.length - 1].dx,
+                dy: this.lasers[this.lasers.length - 1].dy,
+                color: this.lasers[this.lasers.length - 1].color
+            }));
         }
     }
 
@@ -1891,6 +2040,160 @@ class Game {
             } else if (this.player.speedX < -this.player.maxSpeedX) {
                 this.player.speedX = -this.player.maxSpeedX;
             }
+        }
+
+        // Add near the end of the update method, after updating player position
+        if (this.isMultiplayer && socket && socket.readyState === WebSocket.OPEN) {
+            // Send player data to server
+            socket.send(JSON.stringify({
+                type: 'update',
+                player: {
+                    x: this.player.x,
+                    y: this.player.y,
+                    speedX: this.player.speedX,
+                    speedY: this.player.speedY,
+                    gunAngle: this.player.gunAngle,
+                    health: this.player.health,
+                    currentWeapon: this.player.currentWeapon
+                }
+            }));
+        }
+
+        // Add after updating local bullets in the update method
+        if (this.isMultiplayer) {
+            // Update remote bullets
+            Object.keys(remoteBullets).forEach(id => {
+                const bullet = remoteBullets[id];
+                
+                // Move the bullet
+                bullet.x += bullet.dx;
+                bullet.y += bullet.dy;
+                
+                // Check terrain collision
+                const terrainY = this.getGroundHeight(bullet.x);
+                if (bullet.y >= terrainY) {
+                    // Always bounce off the terrain
+                    const terrainAngle = this.getTerrainAngle(bullet.x);
+                    const normalAngle = terrainAngle + Math.PI/2;
+                    
+                    // Calculate incoming angle
+                    const incomingAngle = Math.atan2(bullet.dy, bullet.dx);
+                    
+                    // Calculate reflection angle
+                    const reflectionAngle = 2 * normalAngle - incomingAngle;
+                    
+                    // Set new velocity
+                    const speed = Math.sqrt(bullet.dx * bullet.dx + bullet.dy * bullet.dy);
+                    bullet.dx = Math.cos(reflectionAngle) * speed;
+                    bullet.dy = Math.sin(reflectionAngle) * speed;
+                    
+                    // Ensure the bullet is moving upward after bouncing
+                    if (bullet.dy > 0) {
+                        bullet.dy = -bullet.dy;
+                    }
+                    
+                    // Move bullet above terrain
+                    bullet.y = terrainY - 5;
+                    
+                    // Increment bounce counter
+                    bullet.bounceCount = (bullet.bounceCount || 0) + 1;
+                    
+                    // Create spark effect
+                    for (let i = 0; i < 5; i++) {
+                        this.particles.push({
+                            x: bullet.x,
+                            y: bullet.y,
+                            dx: (Math.random() - 0.5) * 3,
+                            dy: (Math.random() - 0.5) * 3 - 1,
+                            life: 15,
+                            color: '#FFFF00',
+                            size: 2 + Math.random()
+                        });
+                    }
+                    
+                    // Play bounce sound
+                    this.audio.play('hit');
+                    
+                    // Send updated bullet to server
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: 'bulletUpdate',
+                            id: id,
+                            bullet: {
+                                x: bullet.x,
+                                y: bullet.y,
+                                dx: bullet.dx,
+                                dy: bullet.dy,
+                                bounceCount: bullet.bounceCount
+                            }
+                        }));
+                    }
+                }
+                
+                // Check collision with player
+                if (bullet.playerId !== playerId) {
+                    const playerBox = {
+                        x: this.player.x - this.player.width/2,
+                        y: this.player.y - this.player.height/2,
+                        width: this.player.width,
+                        height: this.player.height
+                    };
+                    
+                    if (this.pointInBox(bullet.x, bullet.y, playerBox.x, playerBox.y, playerBox.width, playerBox.height)) {
+                        // Player hit by bullet
+                        this.player.health -= 10;
+                        
+                        // Create hit effect
+                        for (let i = 0; i < 5; i++) {
+                            this.particles.push({
+                                x: bullet.x,
+                                y: bullet.y,
+                                dx: (Math.random() - 0.5) * 2,
+                                dy: (Math.random() - 0.5) * 2,
+                                life: 20,
+                                color: '#FF0000',
+                                size: 2
+                            });
+                        }
+                        
+                        // Play hit sound
+                        this.audio.play('hit');
+                        
+                        // Send player hit to server
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            socket.send(JSON.stringify({
+                                type: 'playerHit',
+                                targetId: playerId
+                            }));
+                        }
+                        
+                        // Remove bullet
+                        delete remoteBullets[id];
+                        
+                        // Send bullet removal to server
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            socket.send(JSON.stringify({
+                                type: 'bulletRemove',
+                                id: id
+                            }));
+                        }
+                    }
+                }
+                
+                // Check if bullet is out of bounds
+                if (bullet.x < 0 || bullet.x > this.worldWidth || 
+                    bullet.y < 0 || bullet.y > this.canvas.height) {
+                    delete remoteBullets[id];
+                    
+                    // Send bullet removal to server
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: 'bulletRemove',
+                            id: id
+                        }));
+                    }
+                }
+            });
         }
     }
 
@@ -2777,6 +3080,25 @@ class Game {
         
         // Always draw the crosshair during gameplay
         this.drawCrosshair();
+
+        // Add after drawing local bullets in the draw method
+        if (this.isMultiplayer) {
+            // Draw remote bullets
+            for (const id in remoteBullets) {
+                const bullet = remoteBullets[id];
+                const screenX = bullet.x - this.viewportX;
+                
+                this.ctx.strokeStyle = bullet.color || '#FF0000';
+                this.ctx.lineWidth = this.laserWidth;
+                this.ctx.beginPath();
+                this.ctx.moveTo(screenX, bullet.y);
+                this.ctx.lineTo(screenX - bullet.dx, bullet.y - bullet.dy);
+                this.ctx.stroke();
+            }
+            
+            // Draw other players
+            this.drawOtherPlayers();
+        }
     }
 
     // Add a separate method to draw the crosshair
@@ -4052,6 +4374,85 @@ class Game {
 
         // Create terrain deformation
         this.deformTerrain(x, y, radius);
+    }
+
+    drawOtherPlayers() {
+        if (!this.isMultiplayer) return;
+        
+        Object.values(otherPlayers).forEach(player => {
+            const screenX = player.x - this.viewportX;
+            
+            // Skip if player is off screen
+            if (screenX < -50 || screenX > this.canvas.width + 50) return;
+            
+            this.ctx.save();
+            this.ctx.translate(screenX + player.width/2, player.y + player.height/2);
+            
+            // Draw stick figure
+            this.ctx.strokeStyle = player.color || '#FF0000';
+            this.ctx.lineWidth = 3;
+            
+            // Body
+            const bodyLength = 20;
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, -bodyLength);
+            this.ctx.lineTo(0, bodyLength/2);
+            this.ctx.stroke();
+            
+            // Head
+            this.ctx.beginPath();
+            this.ctx.arc(0, -bodyLength - 10, 10, 0, Math.PI * 2);
+            this.ctx.stroke();
+            
+            // Arms
+            const armLength = 15;
+            this.ctx.beginPath();
+            this.ctx.moveTo(-armLength, -bodyLength + 5);
+            this.ctx.lineTo(armLength, -bodyLength + 5);
+            this.ctx.stroke();
+            
+            // Left arm (gun arm)
+            const rightArmX = armLength;
+            const rightArmY = -bodyLength + 5;
+            
+            // Legs
+            const legLength = 20;
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, bodyLength/2);
+            this.ctx.lineTo(-10, legLength);
+            this.ctx.moveTo(0, bodyLength/2);
+            this.ctx.lineTo(10, legLength);
+            this.ctx.stroke();
+            
+            // Draw gun
+            this.ctx.beginPath();
+            this.ctx.save();
+            this.ctx.translate(rightArmX, rightArmY);
+            this.ctx.rotate(player.gunAngle);
+            this.ctx.moveTo(0, 0);
+            this.ctx.lineTo(15, 0);
+            this.ctx.stroke();
+            this.ctx.restore();
+            
+            // Draw player ID or name above head
+            this.ctx.fillStyle = player.color || '#FF0000';
+            this.ctx.font = '12px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText(player.id.substring(0, 6), 0, -bodyLength - 25);
+            
+            // Draw health bar
+            const healthBarWidth = 40;
+            const healthBarHeight = 5;
+            const healthPercent = player.health / 100;
+            
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            this.ctx.fillRect(-healthBarWidth/2, -bodyLength - 35, healthBarWidth, healthBarHeight);
+            
+            this.ctx.fillStyle = healthPercent > 0.5 ? '#00FF00' : healthPercent > 0.25 ? '#FFFF00' : '#FF0000';
+            this.ctx.fillRect(-healthBarWidth/2, -bodyLength - 35, healthBarWidth * healthPercent, healthBarHeight);
+            
+            this.ctx.restore();
+        });
     }
 }
 
