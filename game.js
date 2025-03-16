@@ -155,9 +155,12 @@ class Game {
             dashDuration: 15,
             dashSpeed: 90,
             lastWKeyState: false,
-            octaLaserAvailable: true,  // New property for one-time use
-            octaLaser: null,  // New property for the 8-beam laser
-            octaLaserRotation: 0  // New property for rotation angle
+            isTank: false,
+            tankSpeed: 5,
+            tankWidth: 80,
+            tankHeight: 40,
+            tankGunLength: 40,
+            tankColor: '#00FF00'
         };
 
         // Add weapon properties
@@ -185,6 +188,13 @@ class Game {
                 spread: 0,
                 launchForce: 30,  // Reduced from 40 to 30
                 color: '#4488ff'
+            },
+            tank: {
+                shootInterval: 1000,
+                bulletSpeed: 15,
+                spread: 0,
+                launchForce: 20,
+                color: '#00FF00'
             }
         };
 
@@ -195,15 +205,8 @@ class Game {
             s: false,
             d: false,
             e: false,
-            shift: false,
-            '1': false,
-            '2': false,
-            '3': false,
-            '4': false,
-            '5': false,
-            '6': false,
-            '7': false,
-            '8': false
+            '9': false,
+            q: false
         };
 
         // Terrain destruction properties
@@ -310,6 +313,26 @@ class Game {
         this.nukeAnimationFrame = 0;
         this.lastCountdownNumber = 5;
         this.flashSpeed = 0.2; // Controls flash speed
+
+        // Add spinning laser properties
+        this.spinningLasers = null;
+        this.spinningLaserAngle = 0;
+        this.spinningLaserDuration = 0;
+        this.hasUsedSpinningLaser = false;
+
+        // Add key handlers
+        document.addEventListener('keydown', this.handleKeyDown.bind(this));
+        document.addEventListener('keyup', this.handleKeyUp.bind(this));
+        document.addEventListener('mousemove', this.handleMouseMove.bind(this));
+        document.addEventListener('mousedown', this.handleMouseDown.bind(this));
+        document.addEventListener('mouseup', this.handleMouseUp.bind(this));
+
+        // Remove wall properties and add healing properties
+        this.isHealing = false;
+        this.healingProgress = 0;
+        this.healingDuration = 150; // 2.5 seconds at 60fps
+        this.healAmount = 25;
+        this.healingParticles = [];
     }
 
     resizeCanvas() {
@@ -379,7 +402,7 @@ class Game {
         switch(event.key.toLowerCase()) {
             case 'w': 
                 this.keys.w = true; 
-                if (this.player.canJump) {
+                if (this.player.canJump && !this.player.isTank) {
                     this.audio.play('jump');
                 }
                 break;
@@ -389,6 +412,36 @@ class Game {
             case 'e': 
                 this.isChargingGrenade = true;
                 this.keys.e = true;
+                break;
+            case 'q':
+                if (this.player.isTank) {
+                    this.player.isTank = false;
+                    // Reset to stick figure dimensions
+                    this.player.width = 40;
+                    this.player.height = 24;
+                    this.player.maxSpeedX = 8;
+                    this.player.currentWeapon = 'rifle';
+                    this.audio.play('weaponSwitch');
+                }
+                break;
+            case '9':
+                if (!this.isSpaceship) {
+                    this.player.isTank = !this.player.isTank;
+                    if (this.player.isTank) {
+                        // Adjust player dimensions for tank
+                        this.player.width = this.player.tankWidth;
+                        this.player.height = this.player.tankHeight;
+                        this.player.maxSpeedX = this.player.tankSpeed;
+                        this.player.currentWeapon = 'tank';
+                    } else {
+                        // Reset to stick figure dimensions
+                        this.player.width = 40;
+                        this.player.height = 24;
+                        this.player.maxSpeedX = 8;
+                        this.player.currentWeapon = 'rifle';
+                    }
+                    this.audio.play('weaponSwitch');
+                }
                 break;
             case 'shift': 
                 if (event.location === 2) {
@@ -425,8 +478,9 @@ class Game {
                 }
                 break;
             case '4':
-                this.createWoodWall();
-                this.audio.play('wallPlace');
+                if (!this.isHealing && this.player.health < this.player.maxHealth) {
+                    this.startHealing();
+                }
                 break;
             case '5':
                 if (this.nukeReady) {
@@ -439,10 +493,9 @@ class Game {
                     this.createSpecialLaser();
                 }
                 break;
-            case '8':
-                if (this.player.octaLaserAvailable) {
-                    this.createOctaLaser();
-                    this.player.octaLaserAvailable = false;  // Can only use once
+            case '7':
+                if (!this.hasUsedSpinningLaser && !this.spinningLasers) {
+                    this.createSpinningLasers();
                 }
                 break;
         }
@@ -458,6 +511,7 @@ class Game {
                 this.isChargingGrenade = false;
                 this.keys.e = false;
                 break;
+            case 'q': this.keys.q = false; break;
         }
     }
 
@@ -478,36 +532,42 @@ class Game {
 
     handleMouseDown(event) {
         if (!this.gameStarted) {
+            const mouseX = event.clientX - this.canvas.getBoundingClientRect().left;
+            const mouseY = event.clientY - this.canvas.getBoundingClientRect().top;
+
             if (!this.showCharacterSelect) {
-                this.showCharacterSelect = true;
+                // Check if clicked on start button
+                if (this.startButton && 
+                    mouseX >= this.startButton.x && 
+                    mouseX <= this.startButton.x + this.startButton.width &&
+                    mouseY >= this.startButton.y && 
+                    mouseY <= this.startButton.y + this.startButton.height) {
+                    this.showCharacterSelect = true;
+                    this.audio.play('weaponSwitch');
+                }
                 return;
             }
 
             // Handle character selection
-            const boxWidth = 200;
-            const boxHeight = 200;
-            const spacing = 100;
-            const centerX = this.canvas.width / 2;
-            const centerY = this.canvas.height / 2;
-
-            const mouseX = event.clientX - this.canvas.getBoundingClientRect().left;
-            const mouseY = event.clientY - this.canvas.getBoundingClientRect().top;
-
-            // Check if clicked on spaceship box
-            if (mouseX >= centerX - boxWidth - spacing/2 && 
-                mouseX <= centerX - spacing/2 &&
-                mouseY >= centerY - boxHeight/2 &&
-                mouseY <= centerY + boxHeight/2) {
-                this.isSpaceship = true;
-                this.gameStarted = true;
-            }
-            // Check if clicked on stick figure box
-            else if (mouseX >= centerX + spacing/2 &&
-                     mouseX <= centerX + boxWidth + spacing/2 &&
-                     mouseY >= centerY - boxHeight/2 &&
-                     mouseY <= centerY + boxHeight/2) {
-                this.isSpaceship = false;
-                this.gameStarted = true;
+            if (this.characterButtons) {
+                // Check spaceship button
+                if (mouseX >= this.characterButtons.spaceship.x && 
+                    mouseX <= this.characterButtons.spaceship.x + this.characterButtons.spaceship.width &&
+                    mouseY >= this.characterButtons.spaceship.y && 
+                    mouseY <= this.characterButtons.spaceship.y + this.characterButtons.spaceship.height) {
+                    this.isSpaceship = true;
+                    this.gameStarted = true;
+                    this.audio.play('weaponSwitch');
+                }
+                // Check stick figure button
+                else if (mouseX >= this.characterButtons.stickFigure.x && 
+                         mouseX <= this.characterButtons.stickFigure.x + this.characterButtons.stickFigure.width &&
+                         mouseY >= this.characterButtons.stickFigure.y && 
+                         mouseY <= this.characterButtons.stickFigure.y + this.characterButtons.stickFigure.height) {
+                    this.isSpaceship = false;
+                    this.gameStarted = true;
+                    this.audio.play('weaponSwitch');
+                }
             }
             return;
         }
@@ -555,7 +615,34 @@ class Game {
         const weapon = this.weapons[this.player.currentWeapon];
         
         if (currentTime - this.lastShotTime >= this.shootInterval) {
-            if (this.player.currentWeapon === 'launchGun') {
+            if (this.player.currentWeapon === 'tank') {
+                // Tank always shoots grenades
+                const dx = this.cursor.x - (this.player.x - this.viewportX);
+                const dy = this.cursor.y - this.player.y;
+                const angle = Math.atan2(dy, dx);
+                
+                // Calculate initial position at end of tank gun
+                const offsetX = Math.cos(angle) * this.player.tankGunLength;
+                const offsetY = Math.sin(angle) * this.player.tankGunLength;
+                
+                // Create and shoot the grenade
+                this.grenades.push({
+                    x: this.player.x + offsetX,
+                    y: this.player.y + offsetY,
+                    speedX: Math.cos(angle) * 15,
+                    speedY: Math.sin(angle) * 15,
+                    exploded: false,
+                    isCharged: true
+                });
+                
+                // Play shoot sound
+                this.audio.play('shoot');
+                
+                // Add recoil effect
+                this.player.speedX -= Math.cos(angle) * 2;
+                this.player.speedY -= Math.sin(angle) * 2;
+                
+            } else if (this.player.currentWeapon === 'launchGun') {
                 this.audio.play('dash');
                 // Calculate launch direction (opposite of aim)
                 const launchAngle = this.player.gunAngle + Math.PI;
@@ -589,25 +676,6 @@ class Game {
                         color: '#00FF00',  // Changed to match player color
                         size: 2 + Math.random() * 2
                     });
-                }
-            } else if (this.player.currentWeapon === 'shotgun') {
-                if (this.player.ammo >= weapon.pellets) {
-                    this.audio.play('shoot');
-                    for (let i = 0; i < weapon.pellets; i++) {
-                        const spread = (Math.random() - 0.5) * weapon.spread;
-                        const angle = this.player.gunAngle + spread;
-                        const laserDx = Math.cos(angle);
-                        const laserDy = Math.sin(angle);
-                        
-                        this.lasers.push({
-                            x: this.player.x + 25 * laserDx,
-                            y: this.player.y + 25 * laserDy,
-                            dx: laserDx * weapon.bulletSpeed,
-                            dy: laserDy * weapon.bulletSpeed,
-                            color: '#00FF00'  // Changed to match player color
-                        });
-                        this.player.ammo--;
-                    }
                 }
             } else if (this.player.ammo > 0) {
                 this.audio.play('shoot');
@@ -671,66 +739,56 @@ class Game {
     deformTerrain(x, y, radius) {
         // Remove viewport offset since x is already in world coordinates
         const worldX = x;
-        const tunnelHalfWidth = this.tunnelWidth / 2;
+        
+        // Create very small impact dimensions
+        const impactWidth = 10; // Small width for bullet impact
+        const impactDepth = 5;  // Small depth for bullet impact
         
         // Calculate the minimum allowed height (indestructible layer)
         const baseMinHeight = this.canvas.height * (8/9); // Bottom 1/9 is indestructible
-        
-        // Generate random slope direction for this deformation
-        const slopeDirection = Math.random() < 0.5 ? -1 : 1;
-        const slopeIntensity = 0.3 + Math.random() * 0.4; // Random slope steepness
         
         // Find affected terrain points
         for (let i = 0; i < this.terrain.length; i++) {
             const point = this.terrain[i];
             const dx = point.x - worldX;
             
-            // Create a sloped tunnel effect centered on hit point
-            if (Math.abs(dx) < tunnelHalfWidth) {
-                // Calculate jagged, rounded indestructible layer height
-                const jaggedness = Math.sin(point.x * 0.05) * 20; // Sine wave for rounded pattern
-                const noise = Math.sin(point.x * 0.2) * 10; // Additional noise for jaggedness
-                const minHeight = baseMinHeight + jaggedness + noise;
-                
-                // Calculate slope offset based on distance from center
-                const slopeOffset = (dx / tunnelHalfWidth) * slopeIntensity * 40 * slopeDirection;
-                
-                // Get current deformation or use original height
+            if (Math.abs(dx) < impactWidth/2) {
+                // Get current height
                 const currentHeight = this.terrainDamage.get(Math.floor(point.x)) || point.originalY;
                 
-                // Calculate how much to dig based on distance from laser hit point
-                const distanceFromHit = Math.abs(y - currentHeight);
-                const verticalOffset = distanceFromHit < 60 ? 80 : 40;
+                // Calculate distance from center for smooth impact edges
+                const distanceFromCenter = Math.abs(dx) / (impactWidth/2);
                 
-                // Calculate new height with slope and prevent extreme spikes
-                let newHeight = currentHeight + verticalOffset + slopeOffset;
+                // Create a small crater shape
+                const deformation = impactDepth * (1 - distanceFromCenter * distanceFromCenter);
                 
-                // Ensure we don't go below the jagged minimum height
-                newHeight = Math.min(newHeight, minHeight);
+                // Calculate new height with minimal impact
+                let newHeight = currentHeight + deformation;
                 
-                // Prevent extreme height differences between adjacent points
-                if (i > 0) {
-                    const prevHeight = this.terrain[i-1].y;
-                    const maxDiff = 50; // Maximum allowed height difference
-                    if (Math.abs(newHeight - prevHeight) > maxDiff) {
-                        newHeight = prevHeight + (maxDiff * Math.sign(newHeight - prevHeight));
+                // Get the original surface height at this point
+                const surfaceHeight = point.originalY;
+                
+                // Define the invincible layer thickness (10 pixels from surface)
+                const invincibleLayerThickness = 10;
+                
+                // If the new height would penetrate the invincible layer, prevent the deformation
+                if (newHeight > surfaceHeight + invincibleLayerThickness) {
+                    // Ensure we don't go below the minimum height
+                    newHeight = Math.max(newHeight, baseMinHeight);
+                    
+                    // Store deformation
+                    const key = Math.floor(point.x);
+                    this.terrainDamage.set(key, newHeight);
+                    point.y = newHeight;
+                    
+                    // Smooth transitions between deformed points
+                    if (i > 0) {
+                        const prevPoint = this.terrain[i-1];
+                        const prevHeight = this.terrainDamage.get(Math.floor(prevPoint.x)) || prevPoint.originalY;
+                        const smoothedHeight = (newHeight + prevHeight) / 2;
+                        this.terrainDamage.set(Math.floor(prevPoint.x), smoothedHeight);
+                        prevPoint.y = smoothedHeight;
                     }
-                }
-                
-                // Store deformation
-                const key = Math.floor(point.x);
-                this.terrainDamage.set(key, newHeight);
-                point.y = newHeight;
-                
-                // Add some randomness to nearby points for more natural look
-                if (i > 0 && Math.random() < 0.3) {
-                    const prevPoint = this.terrain[i-1];
-                    const prevHeight = this.terrainDamage.get(Math.floor(prevPoint.x)) || prevPoint.originalY;
-                    const smoothedHeight = (newHeight + prevHeight) / 2 + (Math.random() - 0.5) * 10;
-                    const smoothedFinalHeight = Math.min(smoothedHeight, 
-                        baseMinHeight + Math.sin(prevPoint.x * 0.05) * 20 + Math.sin(prevPoint.x * 0.2) * 10);
-                    this.terrainDamage.set(Math.floor(prevPoint.x), smoothedFinalHeight);
-                    prevPoint.y = smoothedFinalHeight;
                 }
             }
         }
@@ -929,7 +987,7 @@ class Game {
             }
         }
 
-        // Handle movement with improved space-like physics
+        // Update movement based on player mode
         if (this.isSpaceship) {
             // Spaceship movement - can fly freely
             if (this.keys.d) {
@@ -961,6 +1019,30 @@ class Game {
                 const angle = Math.atan2(this.player.speedY, this.player.speedX);
                 this.player.speedX = Math.cos(angle) * 122;  // Changed from 61 to 122
                 this.player.speedY = Math.sin(angle) * 122;  // Changed from 61 to 122
+            }
+        } else if (this.player.isTank) {
+            // Tank movement - can only move left/right and is affected by gravity
+            if (this.keys.d) {
+                this.player.speedX = Math.min(this.player.speedX + this.player.acceleration, this.player.tankSpeed);
+            }
+            if (this.keys.a) {
+                this.player.speedX = Math.max(this.player.speedX - this.player.acceleration, -this.player.tankSpeed);
+            }
+            if (!this.keys.a && !this.keys.d) {
+                // Apply higher friction for tank
+                this.player.speedX *= 0.9;
+            }
+            
+            // Apply gravity
+            this.player.speedY += this.player.gravity;
+            
+            // Get ground height for collision
+            const groundHeight = this.getGroundHeight(this.player.x);
+            
+            // Check ground collision
+            if (this.player.y + this.player.height >= groundHeight) {
+                this.player.y = groundHeight - this.player.height;
+                this.player.speedY = 0;
             }
         } else {
             // Stick figure movement - affected by gravity
@@ -1165,40 +1247,85 @@ class Game {
             this.gameState.gameWon = true;
         }
 
-        // Update octa laser
-        if (this.player.octaLaser) {
-            this.player.octaLaser.x = this.player.x;
-            this.player.octaLaser.y = this.player.y;
-            this.player.octaLaser.rotation += 0.02;  // Rotation speed
-            this.player.octaLaser.duration--;
-
-            // Check enemy collisions with all 8 beams
-            for (let i = 0; i < 8; i++) {
-                const angle = this.player.octaLaser.rotation + (Math.PI * 2 * i / 8);
-                const endX = this.player.octaLaser.x + Math.cos(angle) * 2000;
-                const endY = this.player.octaLaser.y + Math.sin(angle) * 2000;
-
+        // Update spinning lasers
+        if (this.spinningLasers) {
+            this.spinningLaserDuration--;
+            if (this.spinningLaserDuration <= 0) {
+                this.spinningLasers = null;
+            } else {
+                // Rotate the lasers
+                this.spinningLaserAngle += 0.1; // Rotation speed
+                
+                // Check enemy collisions for all lasers
                 this.enemies = this.enemies.filter(enemy => {
-                    const dx = enemy.x - this.player.octaLaser.x;
-                    const dy = enemy.y - this.player.octaLaser.y;
-                    const enemyAngle = Math.atan2(dy, dx);
-                    const angleDiff = Math.abs(((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - 
-                                             ((enemyAngle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2));
-                    
-                    if (angleDiff < 0.1 && Math.sqrt(dx * dx + dy * dy) < 2000) {
-                        this.createBloodEffect(enemy.x, enemy.y);
-                        this.audio.play('enemyDeath');
-                        this.gameState.killCount++;
-                        return false;
+                    // Check if any laser hits the enemy
+                    for (const laser of this.spinningLasers) {
+                        laser.x = this.player.x;
+                        laser.y = this.player.y;
+                        laser.angle = this.spinningLaserAngle + (Math.PI * 2 * this.spinningLasers.indexOf(laser)) / 8;
+
+                        // Calculate laser end point
+                        const laserEndX = laser.x + Math.cos(laser.angle) * 2000;
+                        const laserEndY = laser.y + Math.sin(laser.angle) * 2000;
+
+                        // Check if laser line intersects with enemy
+                        if (this.lineIntersectsBox(
+                            laser.x, laser.y,
+                            laserEndX, laserEndY,
+                            enemy.x, enemy.y,
+                            enemy.width, enemy.height
+                        )) {
+                            this.createBloodEffect(enemy.x, enemy.y);
+                            this.audio.play('enemyDeath');
+                            this.gameState.killCount++;
+                            return false;
+                        }
                     }
                     return true;
                 });
             }
+        }
 
-            if (this.player.octaLaser.duration <= 0) {
-                this.player.octaLaser = null;
+        // Update healing
+        if (this.isHealing) {
+            this.healingProgress++;
+            
+            // Create healing particles
+            if (this.healingProgress % 5 === 0) {
+                for (let i = 0; i < 3; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const distance = 30 + Math.random() * 20;
+                    this.healingParticles.push({
+                        x: this.player.x + Math.cos(angle) * distance,
+                        y: this.player.y + Math.sin(angle) * distance,
+                        targetX: this.player.x,
+                        targetY: this.player.y,
+                        life: 20
+                    });
+                }
+            }
+
+            // Apply healing gradually
+            if (this.healingProgress <= this.healingDuration) {
+                const healPerFrame = this.healAmount / this.healingDuration;
+                this.player.health = Math.min(this.player.maxHealth, this.player.health + healPerFrame);
+            }
+
+            if (this.healingProgress >= this.healingDuration) {
+                this.isHealing = false;
+                this.healingProgress = 0;
             }
         }
+
+        // Update healing particles
+        this.healingParticles = this.healingParticles.filter(particle => {
+            const dx = particle.targetX - particle.x;
+            const dy = particle.targetY - particle.y;
+            particle.x += dx * 0.2;
+            particle.y += dy * 0.2;
+            particle.life--;
+            return particle.life > 0;
+        });
     }
 
     drawParticles() {
@@ -1358,30 +1485,25 @@ class Game {
             this.ctx.stroke();
         }
 
-        // Draw octa laser if active
-        if (this.player.octaLaser) {
-            const screenX = this.player.octaLaser.x - this.viewportX;
-            this.ctx.strokeStyle = '#00FF00';
-            this.ctx.lineWidth = 8;
-
-            // Draw all 8 beams
-            for (let i = 0; i < 8; i++) {
-                const angle = this.player.octaLaser.rotation + (Math.PI * 2 * i / 8);
+        // Draw spinning lasers if active
+        if (this.spinningLasers) {
+            this.spinningLasers.forEach(laser => {
+                const screenX = laser.x - this.viewportX;
+                this.ctx.strokeStyle = '#00FF00';
+                this.ctx.lineWidth = 4;
                 this.ctx.beginPath();
-                this.ctx.moveTo(screenX, this.player.octaLaser.y);
+                this.ctx.moveTo(screenX, laser.y);
                 this.ctx.lineTo(
-                    screenX + Math.cos(angle) * 2000,
-                    this.player.octaLaser.y + Math.sin(angle) * 2000
+                    screenX + Math.cos(laser.angle) * 2000,
+                    laser.y + Math.sin(laser.angle) * 2000
                 );
                 this.ctx.stroke();
 
                 // Add glow effect
                 this.ctx.strokeStyle = '#00FF0044';
-                this.ctx.lineWidth = 16;
-                this.ctx.stroke();
-                this.ctx.strokeStyle = '#00FF00';
                 this.ctx.lineWidth = 8;
-            }
+                this.ctx.stroke();
+            });
         }
     }
 
@@ -1422,8 +1544,37 @@ class Game {
             this.ctx.arc(5, 0, 5, 0, Math.PI * 2);
             this.ctx.strokeStyle = '#00FF00';
             this.ctx.stroke();
+        } else if (this.player.isTank) {
+            // Draw tank
+            this.ctx.strokeStyle = this.player.tankColor;
+            this.ctx.lineWidth = 3;
+            
+            // Draw tank body
+            this.ctx.beginPath();
+            this.ctx.rect(-this.player.tankWidth/2, -this.player.tankHeight/2, this.player.tankWidth, this.player.tankHeight);
+            this.ctx.stroke();
+            
+            // Draw tank treads
+            this.ctx.beginPath();
+            this.ctx.rect(-this.player.tankWidth/2, this.player.tankHeight/4, this.player.tankWidth, this.player.tankHeight/4);
+            this.ctx.rect(-this.player.tankWidth/2, -this.player.tankHeight/2, this.player.tankWidth, this.player.tankHeight/4);
+            this.ctx.stroke();
+            
+            // Draw tank turret
+            this.ctx.save();
+            this.ctx.rotate(this.player.gunAngle);
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, 0);
+            this.ctx.lineTo(this.player.tankGunLength, 0);
+            this.ctx.stroke();
+            
+            // Draw turret base
+            this.ctx.beginPath();
+            this.ctx.arc(0, 0, 15, 0, Math.PI * 2);
+            this.ctx.stroke();
+            this.ctx.restore();
         } else {
-            // Draw LeBron James stick figure
+            // Draw stick figure
             this.ctx.rotate(0); // Reset rotation for stick figure
             this.ctx.strokeStyle = '#00FF00';
             this.ctx.lineWidth = 2;
@@ -1700,17 +1851,6 @@ class Game {
         this.ctx.fillStyle = '#fff';
         this.ctx.font = 'bold 16px Arial';
         this.ctx.fillText(`${Math.ceil(this.player.health)} / ${this.player.maxHealth}`, 85, 31);
-
-        // Draw octa laser availability
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        this.ctx.fillRect(10, this.canvas.height - 180, 150, 30);
-        this.ctx.fillStyle = this.player.octaLaserAvailable ? '#00FFFF' : '#FF0000';
-        this.ctx.font = '16px Arial';
-        this.ctx.fillText(
-            this.player.octaLaserAvailable ? 'OCTA LASER: READY' : 'OCTA LASER: USED',
-            20, 
-            this.canvas.height - 160
-        );
     }
 
     drawWalls() {
@@ -1795,47 +1935,182 @@ class Game {
         
         // Draw UI elements without zoom
         this.drawUI();
+
+        // Draw healing effect
+        if (this.isHealing) {
+            const screenX = this.player.x - this.viewportX;
+            
+            // Draw healing circle
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.lineWidth = 2;
+            this.ctx.beginPath();
+            this.ctx.arc(screenX, this.player.y, 40, 0, Math.PI * 2);
+            this.ctx.stroke();
+            
+            // Draw healing progress
+            const progress = this.healingProgress / this.healingDuration;
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.beginPath();
+            this.ctx.arc(screenX, this.player.y, 45, -Math.PI/2, -Math.PI/2 + (Math.PI * 2 * progress));
+            this.ctx.stroke();
+        }
+
+        // Draw healing particles
+        this.ctx.fillStyle = '#00FF00';
+        for (const particle of this.healingParticles) {
+            const screenX = particle.x - this.viewportX;
+            const alpha = particle.life / 20;
+            this.ctx.globalAlpha = alpha;
+            this.ctx.beginPath();
+            this.ctx.arc(screenX, particle.y, 3, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        this.ctx.globalAlpha = 1;
     }
 
     drawStartScreen() {
-        // Draw background
+        // Draw animated space background
+        const time = Date.now() * 0.001;
         const gradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
         gradient.addColorStop(0, '#000033');
-        gradient.addColorStop(1, '#000066');
+        gradient.addColorStop(0.5, '#000066');
+        gradient.addColorStop(1, '#000044');
         this.ctx.fillStyle = gradient;
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+        // Draw animated stars
+        for (let i = 0; i < 100; i++) {
+            const x = (Math.sin(i * 567.5 + time) * 0.5 + 0.5) * this.canvas.width;
+            const y = (Math.cos(i * 234.5 + time) * 0.5 + 0.5) * this.canvas.height;
+            const size = (Math.sin(i + time) * 0.5 + 1.5) * 2;
+            this.ctx.fillStyle = `rgba(255, 255, 255, ${0.5 + Math.sin(i + time) * 0.5})`;
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, size, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+
         if (!this.showCharacterSelect) {
-            // Draw "Start Game" text
-            this.ctx.fillStyle = '#FFFFFF';
-            this.ctx.font = 'bold 48px Arial';
+            // Draw title with glow effect
+            this.ctx.shadowColor = '#00FF00';
+            this.ctx.shadowBlur = 20;
+            this.ctx.fillStyle = '#00FF00';
+            this.ctx.font = 'bold 72px Arial';
             this.ctx.textAlign = 'center';
             this.ctx.textBaseline = 'middle';
-            this.ctx.fillText('Click to Start', this.canvas.width / 2, this.canvas.height / 2);
+            this.ctx.fillText('SPACE WARRIOR', this.canvas.width / 2, this.canvas.height / 3);
+
+            // Draw animated start button
+            const buttonWidth = 300;
+            const buttonHeight = 60;
+            const buttonX = this.canvas.width / 2 - buttonWidth / 2;
+            const buttonY = this.canvas.height * 0.6;
+            const buttonGlow = Math.sin(time * 4) * 10;
+
+            // Button glow effect
+            this.ctx.shadowColor = '#00FF00';
+            this.ctx.shadowBlur = 20 + buttonGlow;
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.lineWidth = 3;
+            this.ctx.strokeRect(buttonX, buttonY, buttonWidth, buttonHeight);
+
+            // Button text
+            this.ctx.fillStyle = '#00FF00';
+            this.ctx.font = 'bold 32px Arial';
+            this.ctx.fillText('START GAME', this.canvas.width / 2, buttonY + buttonHeight / 2);
+
+            // Store button coordinates for click handling
+            this.startButton = {
+                x: buttonX,
+                y: buttonY,
+                width: buttonWidth,
+                height: buttonHeight
+            };
         } else {
-            // Draw character selection screen
-            this.ctx.fillStyle = '#FFFFFF';
+            // Draw character selection title
+            this.ctx.shadowColor = '#00FF00';
+            this.ctx.shadowBlur = 20;
+            this.ctx.fillStyle = '#00FF00';
             this.ctx.font = 'bold 48px Arial';
             this.ctx.fillText('Choose Your Character', this.canvas.width / 2, this.canvas.height / 4);
 
-            // Draw selection boxes
-            const boxWidth = 200;
-            const boxHeight = 200;
+            // Draw selection boxes with hover effects
+            const boxWidth = 250;
+            const boxHeight = 250;
             const spacing = 100;
             const centerX = this.canvas.width / 2;
             const centerY = this.canvas.height / 2;
 
             // Spaceship box
+            this.drawCharacterBox(
+                centerX - boxWidth - spacing/2,
+                centerY - boxHeight/2,
+                boxWidth,
+                boxHeight,
+                'SPACESHIP',
+                'Fast & Agile',
+                this.cursor.x,
+                this.cursor.y,
+                true
+            );
+
+            // Stick figure box
+            this.drawCharacterBox(
+                centerX + spacing/2,
+                centerY - boxHeight/2,
+                boxWidth,
+                boxHeight,
+                'STICK WARRIOR',
+                'Strong & Skilled',
+                this.cursor.x,
+                this.cursor.y,
+                false
+            );
+
+            // Store box coordinates for click handling
+            this.characterButtons = {
+                spaceship: {
+                    x: centerX - boxWidth - spacing/2,
+                    y: centerY - boxHeight/2,
+                    width: boxWidth,
+                    height: boxHeight
+                },
+                stickFigure: {
+                    x: centerX + spacing/2,
+                    y: centerY - boxHeight/2,
+                    width: boxWidth,
+                    height: boxHeight
+                }
+            };
+        }
+
+        // Remove shadow effects
+        this.ctx.shadowBlur = 0;
+    }
+
+    drawCharacterBox(x, y, width, height, title, subtitle, mouseX, mouseY, isSpaceship) {
+        // Check if mouse is over the box
+        const isHovered = mouseX >= x && mouseX <= x + width &&
+                         mouseY >= y && mouseY <= y + height;
+
+        // Box glow effect
+        this.ctx.shadowColor = '#00FF00';
+        this.ctx.shadowBlur = isHovered ? 30 : 10;
+        this.ctx.strokeStyle = '#00FF00';
+        this.ctx.lineWidth = isHovered ? 4 : 2;
+        this.ctx.strokeRect(x, y, width, height);
+
+        // Character preview with animation
+        const time = Date.now() * 0.002;
+        const hoverOffset = isHovered ? Math.sin(time * 3) * 10 : 0;
+
+        this.ctx.save();
+        this.ctx.translate(x + width/2, y + height/2 + hoverOffset);
+        
+        if (isSpaceship) {
+            // Draw animated spaceship
+            this.ctx.rotate(Math.sin(time) * 0.2);
             this.ctx.strokeStyle = '#00FF00';
             this.ctx.lineWidth = 3;
-            this.ctx.strokeRect(centerX - boxWidth - spacing/2, centerY - boxHeight/2, boxWidth, boxHeight);
-            this.ctx.font = 'bold 24px Arial';
-            this.ctx.fillText('Spaceship', centerX - boxWidth/2 - spacing/2, centerY + boxHeight/2 + 40);
-
-            // Draw spaceship preview
-            this.ctx.save();
-            this.ctx.translate(centerX - boxWidth/2 - spacing/2, centerY);
-            this.ctx.strokeStyle = '#00FF00';
             this.ctx.beginPath();
             this.ctx.moveTo(25, 0);
             this.ctx.lineTo(-15, -12);
@@ -1843,34 +2118,68 @@ class Game {
             this.ctx.lineTo(-15, 12);
             this.ctx.lineTo(25, 0);
             this.ctx.stroke();
-            this.ctx.restore();
 
-            // Stick figure box
-            this.ctx.strokeStyle = '#00FF00';
-            this.ctx.strokeRect(centerX + spacing/2, centerY - boxHeight/2, boxWidth, boxHeight);
-            this.ctx.fillText('Stick Figure', centerX + boxWidth/2 + spacing/2, centerY + boxHeight/2 + 40);
-
-            // Draw stick figure preview
-            this.ctx.save();
-            this.ctx.translate(centerX + boxWidth/2 + spacing/2, centerY);
-            this.ctx.strokeStyle = '#00FF00';
-            this.ctx.beginPath();
-            // Head
-            this.ctx.arc(0, -30, 10, 0, Math.PI * 2);
-            // Body
-            this.ctx.moveTo(0, -20);
-            this.ctx.lineTo(0, 20);
-            // Arms
-            this.ctx.moveTo(-15, 0);
-            this.ctx.lineTo(15, 0);
-            // Legs
-            this.ctx.moveTo(0, 20);
-            this.ctx.lineTo(-15, 45);
-            this.ctx.moveTo(0, 20);
-            this.ctx.lineTo(15, 45);
-            this.ctx.stroke();
-            this.ctx.restore();
+            // Engine flames when hovered
+            if (isHovered) {
+                this.ctx.beginPath();
+                const flameLength = 15 + Math.random() * 10;
+                this.ctx.moveTo(-10, -2);
+                this.ctx.lineTo(-10 - flameLength, 0);
+                this.ctx.lineTo(-10, 2);
+                this.ctx.strokeStyle = '#FF4400';
+                this.ctx.stroke();
+            }
+        } else {
+            // Draw animated stick figure
+            const bounce = Math.sin(time * 2) * 5;
+            this.ctx.translate(0, bounce);
+            this.drawStickFigurePreview(isHovered);
         }
+        this.ctx.restore();
+
+        // Title text
+        this.ctx.fillStyle = '#00FF00';
+        this.ctx.font = isHovered ? 'bold 28px Arial' : 'bold 24px Arial';
+        this.ctx.fillText(title, x + width/2, y + height + 30);
+
+        // Subtitle
+        this.ctx.font = isHovered ? '20px Arial' : '18px Arial';
+        this.ctx.fillText(subtitle, x + width/2, y + height + 60);
+    }
+
+    drawStickFigurePreview(isHovered) {
+        const time = Date.now() * 0.002;
+        const armAngle = isHovered ? Math.sin(time * 3) * 0.5 : 0;
+        
+        this.ctx.strokeStyle = '#00FF00';
+        this.ctx.lineWidth = 3;
+
+        // Head
+        this.ctx.beginPath();
+        this.ctx.arc(0, -30, 10, 0, Math.PI * 2);
+        this.ctx.stroke();
+
+        // Body
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, -20);
+        this.ctx.lineTo(0, 20);
+        this.ctx.stroke();
+
+        // Arms with animation
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, -10);
+        this.ctx.lineTo(-15 * Math.cos(armAngle), Math.sin(armAngle) * 15);
+        this.ctx.moveTo(0, -10);
+        this.ctx.lineTo(15 * Math.cos(-armAngle), Math.sin(-armAngle) * 15);
+        this.ctx.stroke();
+
+        // Legs
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, 20);
+        this.ctx.lineTo(-15, 45);
+        this.ctx.moveTo(0, 20);
+        this.ctx.lineTo(15, 45);
+        this.ctx.stroke();
     }
 
     drawDeathScreen() {
@@ -2183,9 +2492,12 @@ class Game {
             dashDuration: 15,
             dashSpeed: 90,
             lastWKeyState: false,
-            octaLaserAvailable: true,  // New property for one-time use
-            octaLaser: null,  // New property for the 8-beam laser
-            octaLaserRotation: 0  // New property for rotation angle
+            isTank: false,
+            tankSpeed: 5,
+            tankWidth: 80,
+            tankHeight: 40,
+            tankGunLength: 40,
+            tankColor: '#00FF00'
         };
 
         // Reset game state
@@ -2196,7 +2508,7 @@ class Game {
             killCount: 0,
             requiredKills: 100,
             level: 1,
-            maxEnemies: 7  // Also update the game state max enemies
+            maxEnemies: 20  // Also update the game state max enemies
         };
 
         // Clear all arrays
@@ -2229,15 +2541,15 @@ class Game {
             a: false,
             s: false,
             d: false,
-            e: false
+            e: false,
+            '9': false,
+            q: false
         };
         this.mouseDown = false;
         this.isChargingGrenade = false;
 
         // Reset camera
         this.cameraZoom = 1.0;
-        this.player.octaLaserAvailable = true;  // Reset octa laser availability
-        this.player.octaLaser = null;
     }
 
     createBloodEffect(x, y) {
@@ -2348,26 +2660,26 @@ class Game {
 
     createGrenadeExplosion(x, y, isCharged = false) {
         this.audio.play('explosion');
-        // Create explosion particles
-        const particleCount = isCharged ? 50 : 15; // Reduced particle count
+        // Create explosion particles with greatly reduced count
+        const particleCount = isCharged ? 8 : 3; // Reduced from 15/5 to 8/3
         for (let i = 0; i < particleCount; i++) {
             const angle = (Math.PI * 2 * i) / particleCount;
-            const speed = isCharged ? (3 + Math.random() * 4) : (2 + Math.random() * 3); // Reduced speeds
+            const speed = isCharged ? (0.5 + Math.random()) : (0.2 + Math.random() * 0.5); // Reduced speeds
             this.particles.push({
                 x: x,
                 y: y,
                 dx: Math.cos(angle) * speed,
-                dy: Math.sin(angle) * speed - 2,
-                life: isCharged ? 60 : 30, // Reduced particle life
-                color: isCharged ? '#FF0000' : '#FF4400',
-                size: isCharged ? (3 + Math.random() * 3) : (2 + Math.random() * 2) // Reduced sizes
+                dy: Math.sin(angle) * speed - 0.5,
+                life: isCharged ? 20 : 10, // Reduced particle life
+                color: isCharged ? '#FF4400' : '#FF8800',
+                size: isCharged ? (1 + Math.random()) : (0.5 + Math.random() * 0.5) // Reduced sizes
             });
         }
 
-        // Calculate blast radius - significantly reduced
-        const blastRadius = isCharged ? 150 : 75; // Halved blast radius
+        // Calculate blast radius - reduced by 90%
+        const blastRadius = isCharged ? 15 : 7; // Reduced from 45/22 to 15/7
 
-        // Check for enemies in blast radius
+        // Check for enemies in blast radius with reduced damage
         this.enemies = this.enemies.filter(enemy => {
             const dx = enemy.x - x;
             const dy = enemy.y - y;
@@ -2376,7 +2688,7 @@ class Game {
             if (distance <= blastRadius) {
                 enemy.isDying = true;
                 enemy.deathTimer = 0;
-                enemy.speedY = -5;
+                enemy.speedY = -1; // Reduced upward force
                 enemy.color = '#000000';
                 enemy.canShoot = false;
                 this.deadEnemies.push(enemy);
@@ -2388,11 +2700,11 @@ class Game {
             return true;
         });
 
-        // Create smaller hole in terrain
-        const multiplier = isCharged ? 5 : 1; // Reduced from 10 to 5 for charged grenades
-        const baseHoleWidth = isCharged ? (this.canvas.width / 16) : (this.canvas.width / 48); // Reduced hole width
+        // Create smaller hole in terrain with reduced impact
+        const multiplier = isCharged ? 0.5 : 0.2; // Reduced from 1.5/0.5 to 0.5/0.2
+        const baseHoleWidth = isCharged ? (this.canvas.width / 96) : (this.canvas.width / 192); // Reduced hole width
         const holeWidth = baseHoleWidth * (this.worldWidth / this.canvas.width);
-        const holeDepth = 20 * multiplier; // Significantly reduced from grenadeRadius * multiplier
+        const holeDepth = 2 * multiplier; // Reduced from 6 to 2
         
         // Calculate base minimum height (indestructible layer)
         const baseMinHeight = this.canvas.height * (8/9); // Bottom 1/9 is indestructible
@@ -2566,7 +2878,7 @@ class Game {
 
     startLevel2() {
         this.gameState.level = 2;
-        this.gameState.maxEnemies = 7; // Keep consistent max enemies in level 2
+        this.gameState.maxEnemies = 20; // Keep consistent max enemies in level 2
         this.maxEnemies = this.gameState.maxEnemies;
         // Reset enemy spawn timer to immediately start spawning new enemies
         this.spawnEnemyTimer = this.enemySpawnInterval;
@@ -2707,16 +3019,28 @@ class Game {
         }
     }
 
-    createOctaLaser() {
+    createSpinningLasers() {
+        if (this.hasUsedSpinningLaser) return;
+        
         this.audio.play('shoot');
-        this.player.octaLaser = {
+        this.spinningLasers = Array(8).fill().map((_, i) => ({
             x: this.player.x,
             y: this.player.y,
-            rotation: 0,
-            duration: 10 * 60  // 10 seconds at 60fps
-        };
+            angle: (Math.PI * 2 * i) / 8
+        }));
+        this.spinningLaserDuration = 5 * 60; // 5 seconds at 60fps
+        this.hasUsedSpinningLaser = true;
+    }
+
+    startHealing() {
+        if (this.player.health >= this.player.maxHealth) return;
+        
+        this.isHealing = true;
+        this.healingProgress = 0;
+        this.audio.play('collect'); // Use collect sound for healing
     }
 }
+
 
 // Start the game when the page loads
 window.onload = () => {
