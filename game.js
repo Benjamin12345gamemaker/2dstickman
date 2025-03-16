@@ -173,7 +173,7 @@ class Game {
                 shootInterval: 500,
                 bulletSpeed: 12,
                 spread: 0.5,
-                pellets: 8  // Ensure this is correct
+                pellets: 8
             },
             sniper: {
                 shootInterval: 1000,
@@ -185,10 +185,34 @@ class Game {
                 shootInterval: 500,
                 bulletSpeed: 40,
                 spread: 0,
-                launchForce: 70,  // Reduced from 40 to 30
+                launchForce: 70,
                 color: '#4488ff'
             },
+            minigun: {
+                shootInterval: 50, // Faster than rifle
+                bulletSpeed: 60,
+                spread: 0.3,
+                color: '#FFD700'
+            }
         };
+
+        // Add shop properties
+        this.shop = {
+            isOpen: false,
+            items: {
+                minigun: {
+                    name: 'Minigun',
+                    cost: 30,
+                    purchased: false
+                }
+            },
+            canOpen: false,
+            timeRemaining: 0, // Time remaining to shop in frames (60fps)
+            shopDuration: 900 // 15 seconds at 60fps
+        };
+
+        // Add coin system
+        this.coins = 0;
 
         // Input handling
         this.keys = {
@@ -296,7 +320,7 @@ class Game {
         
         // Add special laser cooldown properties
         this.specialLaserCooldown = 0;
-        this.specialLaserMaxCooldown = 0 * 60; // 0 seconds cooldown at 60fps
+        this.specialLaserMaxCooldown = 600; // 10 seconds cooldown at 60fps
         
         // Add nuke animation properties
         this.nukeCountdown = 0;
@@ -311,7 +335,8 @@ class Game {
         this.spinningLaserAngle = 0;
         this.spinningLaserDuration = 0;
         this.spinningLaserCooldown = 0;
-        this.spinningLaserCooldownTime = 300; // 5 seconds at 60fps
+        this.spinningLaserCooldownTime = 600; // 10 seconds at 60fps
+        this.spinningLaserUsed = false; // Add flag for one-time use
 
         // Add key handlers
         document.addEventListener('keydown', this.handleKeyDown.bind(this));
@@ -333,7 +358,8 @@ class Game {
             enemiesPerWave: 20,
             enemiesSpawned: 0,
             breakTimer: 0,
-            breakDuration: 900, // 15 seconds at 60fps
+            initialBreakDuration: 900, // 15 seconds at 60fps
+            breakDuration: 900, // Will be updated each wave
             isBreak: false,
             baseEnemyAccuracy: 0.1, // Base enemy accuracy
             enemyAccuracyIncrement: 0.05, // 5% increase per wave
@@ -481,6 +507,11 @@ class Game {
                     this.createSpinningLasers();
                 }
                 break;
+            case 'b': // Shop toggle
+                if (this.shop.canOpen && this.shop.timeRemaining > 0) {
+                    this.shop.isOpen = !this.shop.isOpen;
+                }
+                break;
         }
     }
 
@@ -597,7 +628,7 @@ class Game {
         const currentTime = Date.now();
         const weapon = this.weapons[this.player.currentWeapon];
         
-        if (currentTime - this.lastShotTime >= weapon.shootInterval) {
+        if (currentTime - this.lastShotTime >= weapon.shootInterval && this.player.ammo > 0) {
             // Calculate direction to cursor
             const dx = this.cursor.x - (this.player.x - this.viewportX);
             const dy = this.cursor.y - this.player.y;
@@ -613,7 +644,7 @@ class Game {
                 // Create multiple pellets
                 for (let i = 0; i < weapon.pellets; i++) {
                     const spreadAngle = angle + (Math.random() - 0.5) * weapon.spread;
-                this.lasers.push({
+                    this.lasers.push({
                         x: this.player.x,
                         y: this.player.y,
                         dx: Math.cos(spreadAngle) * weapon.bulletSpeed,
@@ -782,7 +813,7 @@ class Game {
 
         // Spawn new enemies
         this.spawnEnemyTimer++;
-        if (this.spawnEnemyTimer >= this.enemySpawnInterval) {
+        if (!this.waveSystem.isBreak && this.spawnEnemyTimer >= this.enemySpawnInterval) {
             this.spawnEnemyTimer = 0;
             if (this.enemies.length < this.maxEnemies) {
                 this.spawnEnemy();
@@ -856,6 +887,7 @@ class Game {
                     this.audio.play('enemyDeath');
                     this.gameState.killCount++;
                     this.waveSystem.waveKills++; // Add this line
+                    this.coins++; // Add coins for kills
                     return false;
                 }
             }
@@ -933,6 +965,7 @@ class Game {
                         this.audio.play('enemyDeath');
                         this.gameState.killCount++;
                         this.waveSystem.waveKills++; // Add this line
+                        this.coins++; // Add coins for kills
                         return false;
                     }
                     return true;
@@ -1215,13 +1248,19 @@ class Game {
                             this.createBloodEffect(enemy.x, enemy.y);
                             this.audio.play('enemyDeath');
                             this.gameState.killCount++;
-                            this.waveSystem.waveKills++; // Add this line
+                            this.waveSystem.waveKills++;
+                            this.coins++; // Add coins for kills
                             return false;
                         }
                     }
                     return true;
                 });
             }
+        }
+        
+        // Update spinning laser cooldown
+        if (this.spinningLaserCooldown > 0) {
+            this.spinningLaserCooldown--;
         }
 
         // Update healing
@@ -1278,6 +1317,10 @@ class Game {
                 this.waveSystem.waveKills = 0; // Reset wave kill counter
                 this.gameState.currentWave = this.waveSystem.currentWave;
                 
+                // Calculate new break duration for next wave (5 seconds less, minimum 5 seconds)
+                const reductionAmount = (this.waveSystem.currentWave - 1) * 300; // 5 seconds = 300 frames
+                this.waveSystem.breakDuration = Math.max(300, this.waveSystem.initialBreakDuration - reductionAmount);
+                
                 // Display wave start message
                 this.waveStartTime = Date.now();
                 this.waveStartMessage = `WAVE ${this.waveSystem.currentWave} START!`;
@@ -1300,6 +1343,13 @@ class Game {
                 
                 // Clear remaining enemies
                 this.enemies = [];
+
+                // Add coins for completing the wave
+                this.coins++;
+
+                // Enable shop for the break duration
+                this.shop.canOpen = true;
+                this.shop.timeRemaining = this.shop.shopDuration;
             }
             // Check if we need to spawn more enemies
             else if (this.enemies.length < 20 && this.waveSystem.enemiesSpawned < this.waveSystem.enemiesPerWave) {
@@ -1313,20 +1363,14 @@ class Game {
                 }
             }
         }
-        
-        // Update spinning lasers
-        if (this.spinningLasers) {
-            this.spinningLaserDuration--;
-            if (this.spinningLaserDuration <= 0) {
-                this.spinningLasers = null;
-            } else {
-                // Rotate the lasers code...
+
+        // Update shop timer
+        if (this.shop.canOpen && this.shop.timeRemaining > 0) {
+            this.shop.timeRemaining--;
+            if (this.shop.timeRemaining <= 0) {
+                this.shop.isOpen = false;
+                this.shop.canOpen = false;
             }
-        }
-        
-        // Update spinning laser cooldown
-        if (this.spinningLaserCooldown > 0) {
-            this.spinningLaserCooldown--;
         }
     }
 
@@ -1882,6 +1926,63 @@ class Game {
             this.ctx.font = '12px Arial';
             this.ctx.fillText('Laser Beam Cooldown', x, y - 5);
         }
+
+        // Draw coins
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(10, 50, 150, 30);
+        this.ctx.fillStyle = '#FFD700';
+        this.ctx.font = '16px Arial';
+        this.ctx.fillText(`Coins: ${this.coins}`, 20, 70);
+
+        // Draw shop button only when available
+        if (this.shop.canOpen && this.shop.timeRemaining > 0) {
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            this.ctx.fillRect(10, 90, 150, 30);
+            this.ctx.fillStyle = '#FFFFFF';
+            this.ctx.fillText(`Shop [B] - ${Math.ceil(this.shop.timeRemaining / 60)}s`, 20, 110);
+        }
+
+        // Draw shop if open
+        if (this.shop.isOpen) {
+            // Pause game rendering
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            
+            // Shop background
+            this.ctx.fillStyle = 'rgba(50, 50, 50, 0.95)';
+            this.ctx.fillRect(this.canvas.width/2 - 200, this.canvas.height/2 - 150, 400, 300);
+            
+            // Shop title with timer
+            this.ctx.fillStyle = '#FFFFFF';
+            this.ctx.font = '24px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText('SHOP', this.canvas.width/2, this.canvas.height/2 - 120);
+            this.ctx.font = '16px Arial';
+            this.ctx.fillStyle = '#FFD700';
+            this.ctx.fillText(`Time Remaining: ${Math.ceil(this.shop.timeRemaining / 60)}s`, 
+                this.canvas.width/2, this.canvas.height/2 - 90);
+            
+            // Minigun item
+            const minigun = this.shop.items.minigun;
+            this.ctx.font = '16px Arial';
+            if (!minigun.purchased) {
+                this.ctx.fillStyle = this.coins >= minigun.cost ? '#00FF00' : '#FF0000';
+                this.ctx.fillText(`${minigun.name} - ${minigun.cost} coins`, this.canvas.width/2, this.canvas.height/2 - 40);
+                this.ctx.font = '12px Arial';
+                this.ctx.fillStyle = '#AAAAAA';
+                this.ctx.fillText('Press 1 to buy', this.canvas.width/2, this.canvas.height/2 - 20);
+            } else {
+                this.ctx.fillStyle = '#888888';
+                this.ctx.fillText(`${minigun.name} - PURCHASED`, this.canvas.width/2, this.canvas.height/2 - 40);
+            }
+            
+            // Shop close instruction
+            this.ctx.fillStyle = '#AAAAAA';
+            this.ctx.font = '14px Arial';
+            this.ctx.fillText('Press B to close shop', this.canvas.width/2, this.canvas.height/2 + 120);
+            
+            this.ctx.textAlign = 'left';
+        }
     }
 
     drawWalls() {
@@ -2349,17 +2450,30 @@ class Game {
     }
 
     spawnEnemy() {
-        // Calculate spawn position relative to player's current position
-        const spawnDistance = 1000 + Math.random() * 500; // 1000-1500 pixels away
+        // Calculate spawn position with more randomization
+        const minSpawnDistance = 800;  // Minimum distance from player
+        const maxSpawnDistance = 2000; // Maximum distance from player
+        const spawnDistance = minSpawnDistance + Math.random() * (maxSpawnDistance - minSpawnDistance);
         const spawnDirection = Math.random() < 0.5 ? -1 : 1; // Left or right
-        const spawnX = this.player.x + (spawnDirection * spawnDistance);
         
-        // Make sure we get a valid ground height
+        // Calculate base spawn position
+        let spawnX = this.player.x + (spawnDirection * spawnDistance);
+        
+        // Add some random offset to create clusters
+        spawnX += (Math.random() - 0.5) * 400; // ±200 pixels from base position
+        
+        // Keep spawn within world bounds
+        spawnX = Math.max(0, Math.min(spawnX, this.worldWidth));
+        
+        // Get ground height at spawn position
         const groundHeight = this.getGroundHeight(spawnX);
+        
+        // Add some height variation for spawning
+        const heightVariation = Math.random() * 100; // Spawn up to 100 pixels above ground
         
         const enemy = {
             x: spawnX,
-            y: groundHeight - 50, // 50 pixels above ground
+            y: groundHeight - 50 - heightVariation, // Base height + random elevation
             width: 30,
             height: 50,
             speedX: 0,
@@ -2374,7 +2488,8 @@ class Game {
                           (this.waveSystem.currentWave - 1) * this.waveSystem.enemyAccuracyIncrement,
             color: '#FF0000',
             isDying: false,
-            deathTimer: 0
+            deathTimer: 0,
+            ammo: 5 // Each enemy drops 5 ammo
         };
         
         this.enemies.push(enemy);
@@ -2649,11 +2764,12 @@ class Game {
             enemiesPerWave: 20,
             enemiesSpawned: 0,
             breakTimer: 0,
-            breakDuration: 900, // 15 seconds at 60fps
+            initialBreakDuration: 900, // 15 seconds at 60fps
+            breakDuration: 900, // Reset to initial duration
             isBreak: false,
             baseEnemyAccuracy: 0.1,
             enemyAccuracyIncrement: 0.05,
-            waveKills: 0 // Make sure to add this
+            waveKills: 0
         };
         
         // Reset laser properties
@@ -2661,6 +2777,13 @@ class Game {
         this.spinningLaserAngle = 0;
         this.spinningLaserDuration = 0;
         this.spinningLaserCooldown = 0;
+        this.spinningLaserUsed = false; // Reset the one-time use flag
+        // Reset shop state
+        this.shop.isOpen = false;
+        this.shop.canOpen = false;
+        this.shop.timeRemaining = 0;
+        Object.values(this.shop.items).forEach(item => item.purchased = false);
+        this.coins = 0;
     }
 
     createBloodEffect(x, y) {
@@ -2806,7 +2929,7 @@ class Game {
                 this.createBloodEffect(enemy.x, enemy.y);
                 this.audio.play('enemyDeath');
                 this.gameState.killCount++;
-                this.waveSystem.waveKills++; // Add this line
+                this.waveSystem.waveKills++; // Add wave kill tracking
                 return false;
             }
             return true;
@@ -3084,6 +3207,8 @@ class Game {
                 enemy.canShoot = false;
                 this.deadEnemies.push(enemy);
                 this.createBloodEffect(enemy.x, enemy.y);
+                this.gameState.killCount++; // Add this to track kills
+                this.waveSystem.waveKills++; // Add this to track wave kills
             }
         });
         this.enemies = this.enemies.filter(enemy => !enemy.isDying);
@@ -3132,7 +3257,7 @@ class Game {
     }
 
     createSpinningLasers() {
-        if (this.spinningLaserCooldown > 0 || this.spinningLasers) return;
+        if (this.spinningLaserCooldown > 0 || this.spinningLasers || this.spinningLaserUsed) return;
         
         this.audio.play('shoot');
         this.spinningLasers = Array(8).fill().map((_, i) => ({
@@ -3142,6 +3267,7 @@ class Game {
         }));
         this.spinningLaserDuration = 5 * 60; // 5 seconds at 60fps
         this.spinningLaserCooldown = this.spinningLaserCooldownTime;
+        this.spinningLaserUsed = true; // Mark as used
     }
 
     startHealing() {
