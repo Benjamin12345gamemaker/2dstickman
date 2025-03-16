@@ -153,7 +153,11 @@ class Game {
             isDashing: false,
             dashCooldown: 0,
             dashDuration: 15,
-            dashSpeed: 90
+            dashSpeed: 90,
+            lastWKeyState: false,
+            octaLaserAvailable: true,  // New property for one-time use
+            octaLaser: null,  // New property for the 8-beam laser
+            octaLaserRotation: 0  // New property for rotation angle
         };
 
         // Add weapon properties
@@ -190,7 +194,16 @@ class Game {
             a: false,
             s: false,
             d: false,
-            e: false
+            e: false,
+            shift: false,
+            '1': false,
+            '2': false,
+            '3': false,
+            '4': false,
+            '5': false,
+            '6': false,
+            '7': false,
+            '8': false
         };
 
         // Terrain destruction properties
@@ -223,7 +236,7 @@ class Game {
             killCount: 0,
             requiredKills: 100,
             level: 1,
-            maxEnemies: 5
+            maxEnemies: 7  // Also update the game state max enemies
         };
 
         // Enemy properties
@@ -232,7 +245,7 @@ class Game {
         this.enemyBullets = [];
         this.spawnEnemyTimer = 0;
         this.enemySpawnInterval = 5; // Changed from 30 to 5 for much faster spawning (6x faster)
-        this.maxEnemies = 20;  // Changed from 35 to 20
+        this.maxEnemies = 7;  // Changed from 20 to 7 for stick figure mode
         
         // Add blood particle properties
         this.bloodParticles = [];
@@ -424,6 +437,12 @@ class Game {
             case ' ': // Space bar
                 if (!this.specialLaser && this.specialLaserDuration <= 0 && this.specialLaserCooldown <= 0) {
                     this.createSpecialLaser();
+                }
+                break;
+            case '8':
+                if (this.player.octaLaserAvailable) {
+                    this.createOctaLaser();
+                    this.player.octaLaserAvailable = false;  // Can only use once
                 }
                 break;
         }
@@ -654,27 +673,65 @@ class Game {
         const worldX = x;
         const tunnelHalfWidth = this.tunnelWidth / 2;
         
+        // Calculate the minimum allowed height (indestructible layer)
+        const baseMinHeight = this.canvas.height * (8/9); // Bottom 1/9 is indestructible
+        
+        // Generate random slope direction for this deformation
+        const slopeDirection = Math.random() < 0.5 ? -1 : 1;
+        const slopeIntensity = 0.3 + Math.random() * 0.4; // Random slope steepness
+        
         // Find affected terrain points
         for (let i = 0; i < this.terrain.length; i++) {
             const point = this.terrain[i];
             const dx = point.x - worldX;
             
-            // Create a rectangular tunnel effect centered on hit point
+            // Create a sloped tunnel effect centered on hit point
             if (Math.abs(dx) < tunnelHalfWidth) {
+                // Calculate jagged, rounded indestructible layer height
+                const jaggedness = Math.sin(point.x * 0.05) * 20; // Sine wave for rounded pattern
+                const noise = Math.sin(point.x * 0.2) * 10; // Additional noise for jaggedness
+                const minHeight = baseMinHeight + jaggedness + noise;
+                
+                // Calculate slope offset based on distance from center
+                const slopeOffset = (dx / tunnelHalfWidth) * slopeIntensity * 40 * slopeDirection;
+                
                 // Get current deformation or use original height
                 const currentHeight = this.terrainDamage.get(Math.floor(point.x)) || point.originalY;
                 
                 // Calculate how much to dig based on distance from laser hit point
                 const distanceFromHit = Math.abs(y - currentHeight);
-                const verticalOffset = distanceFromHit < 40 ? 40 : 20; // Dig more at hit point
+                const verticalOffset = distanceFromHit < 60 ? 80 : 40;
                 
-                // Add new deformation, allowing for upward digging
-                const newHeight = currentHeight + verticalOffset;
+                // Calculate new height with slope and prevent extreme spikes
+                let newHeight = currentHeight + verticalOffset + slopeOffset;
+                
+                // Ensure we don't go below the jagged minimum height
+                newHeight = Math.min(newHeight, minHeight);
+                
+                // Prevent extreme height differences between adjacent points
+                if (i > 0) {
+                    const prevHeight = this.terrain[i-1].y;
+                    const maxDiff = 50; // Maximum allowed height difference
+                    if (Math.abs(newHeight - prevHeight) > maxDiff) {
+                        newHeight = prevHeight + (maxDiff * Math.sign(newHeight - prevHeight));
+                    }
+                }
                 
                 // Store deformation
                 const key = Math.floor(point.x);
                 this.terrainDamage.set(key, newHeight);
                 point.y = newHeight;
+                
+                // Add some randomness to nearby points for more natural look
+                if (i > 0 && Math.random() < 0.3) {
+                    const prevPoint = this.terrain[i-1];
+                    const prevHeight = this.terrainDamage.get(Math.floor(prevPoint.x)) || prevPoint.originalY;
+                    const smoothedHeight = (newHeight + prevHeight) / 2 + (Math.random() - 0.5) * 10;
+                    const smoothedFinalHeight = Math.min(smoothedHeight, 
+                        baseMinHeight + Math.sin(prevPoint.x * 0.05) * 20 + Math.sin(prevPoint.x * 0.2) * 10);
+                    this.terrainDamage.set(Math.floor(prevPoint.x), smoothedFinalHeight);
+                    prevPoint.y = smoothedFinalHeight;
+                }
             }
         }
     }
@@ -932,8 +989,8 @@ class Game {
                 this.player.doubleJump = true;
             }
             
-            // Handle jumping (with double jump)
-            if (this.keys.w) {
+            // Handle initial jump and double jump (only on key press)
+            if (this.keys.w && this.player.lastWKeyState === false) {
                 if (this.player.canJump) {
                     this.player.speedY = this.player.jumpForce;
                     this.player.canJump = false;
@@ -943,8 +1000,34 @@ class Game {
                     this.player.doubleJump = false;
                     this.audio.play('jump');
                 }
-                this.keys.w = false; // Reset jump key to prevent holding
             }
+            
+            // Jetpack functionality when holding W (after initial jump)
+            if (this.keys.w && !this.player.canJump && !this.isSpaceship) {
+                // Apply upward force
+                this.player.speedY = Math.max(this.player.speedY - 1.2, -8); // Cap upward speed
+                
+                // Create jetpack particles
+                for (let i = 0; i < 3; i++) {
+                    const spread = (Math.random() - 0.5) * 0.5;
+                    const speed = 3 + Math.random() * 4;
+                    this.particles.push({
+                        x: this.player.x,
+                        y: this.player.y + this.player.height - 10,
+                        dx: Math.cos(Math.PI/2 + spread) * speed,
+                        dy: Math.sin(Math.PI/2 + spread) * speed,
+                        life: 15 + Math.random() * 10,
+                        color: '#FF4400',
+                        size: 2 + Math.random() * 2
+                    });
+                }
+                
+                // Play jetpack sound
+                this.audio.play('fly');
+            }
+            
+            // Store current W key state for next frame
+            this.player.lastWKeyState = this.keys.w;
         }
 
         // Update player position
@@ -1080,6 +1163,41 @@ class Game {
             this.startLevel2();
         } else if (this.gameState.killCount >= this.gameState.requiredKills * 2 && this.gameState.level === 2) {
             this.gameState.gameWon = true;
+        }
+
+        // Update octa laser
+        if (this.player.octaLaser) {
+            this.player.octaLaser.x = this.player.x;
+            this.player.octaLaser.y = this.player.y;
+            this.player.octaLaser.rotation += 0.02;  // Rotation speed
+            this.player.octaLaser.duration--;
+
+            // Check enemy collisions with all 8 beams
+            for (let i = 0; i < 8; i++) {
+                const angle = this.player.octaLaser.rotation + (Math.PI * 2 * i / 8);
+                const endX = this.player.octaLaser.x + Math.cos(angle) * 2000;
+                const endY = this.player.octaLaser.y + Math.sin(angle) * 2000;
+
+                this.enemies = this.enemies.filter(enemy => {
+                    const dx = enemy.x - this.player.octaLaser.x;
+                    const dy = enemy.y - this.player.octaLaser.y;
+                    const enemyAngle = Math.atan2(dy, dx);
+                    const angleDiff = Math.abs(((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - 
+                                             ((enemyAngle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2));
+                    
+                    if (angleDiff < 0.1 && Math.sqrt(dx * dx + dy * dy) < 2000) {
+                        this.createBloodEffect(enemy.x, enemy.y);
+                        this.audio.play('enemyDeath');
+                        this.gameState.killCount++;
+                        return false;
+                    }
+                    return true;
+                });
+            }
+
+            if (this.player.octaLaser.duration <= 0) {
+                this.player.octaLaser = null;
+            }
         }
     }
 
@@ -1238,6 +1356,32 @@ class Game {
             this.ctx.strokeStyle = '#00FF0044';  // Changed to match player color with transparency
             this.ctx.lineWidth = 16;
             this.ctx.stroke();
+        }
+
+        // Draw octa laser if active
+        if (this.player.octaLaser) {
+            const screenX = this.player.octaLaser.x - this.viewportX;
+            this.ctx.strokeStyle = '#00FF00';
+            this.ctx.lineWidth = 8;
+
+            // Draw all 8 beams
+            for (let i = 0; i < 8; i++) {
+                const angle = this.player.octaLaser.rotation + (Math.PI * 2 * i / 8);
+                this.ctx.beginPath();
+                this.ctx.moveTo(screenX, this.player.octaLaser.y);
+                this.ctx.lineTo(
+                    screenX + Math.cos(angle) * 2000,
+                    this.player.octaLaser.y + Math.sin(angle) * 2000
+                );
+                this.ctx.stroke();
+
+                // Add glow effect
+                this.ctx.strokeStyle = '#00FF0044';
+                this.ctx.lineWidth = 16;
+                this.ctx.stroke();
+                this.ctx.strokeStyle = '#00FF00';
+                this.ctx.lineWidth = 8;
+            }
         }
     }
 
@@ -1556,6 +1700,17 @@ class Game {
         this.ctx.fillStyle = '#fff';
         this.ctx.font = 'bold 16px Arial';
         this.ctx.fillText(`${Math.ceil(this.player.health)} / ${this.player.maxHealth}`, 85, 31);
+
+        // Draw octa laser availability
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(10, this.canvas.height - 180, 150, 30);
+        this.ctx.fillStyle = this.player.octaLaserAvailable ? '#00FFFF' : '#FF0000';
+        this.ctx.font = '16px Arial';
+        this.ctx.fillText(
+            this.player.octaLaserAvailable ? 'OCTA LASER: READY' : 'OCTA LASER: USED',
+            20, 
+            this.canvas.height - 160
+        );
     }
 
     drawWalls() {
@@ -1977,38 +2132,112 @@ class Game {
     }
 
     restartGame() {
-        // Reset player position and state
-        this.player.x = 100;
-        this.player.y = this.canvas.height * 0.6 - 40;
-        this.player.speedX = 0;
-        this.player.speedY = 0;
-        this.player.isDead = false;
-        this.player.canFly = false;
-        this.player.health = this.player.maxHealth;
-        this.player.ammo = 200; // Reset to initial ammo amount
+        // Reset game state flags
+        this.gameStarted = false;
+        this.showCharacterSelect = false;
+        this.isSpaceship = true;
+        
+        // Reset viewport and world
+        this.viewportX = 0;
+        this.worldWidth = 6000;
+        
+        // Get initial ground height for player spawn
+        const initialGroundHeight = this.canvas.height * 0.6;
+        
+        // Reset player to initial state
+        this.player = {
+            x: 100,
+            y: initialGroundHeight - 40,
+            width: 40,
+            height: 24,
+            health: 100,
+            maxHealth: 100,
+            speedX: 0,
+            speedY: 0,
+            maxSpeedX: 8,
+            acceleration: 0.8,
+            friction: 0.95,
+            gravity: 0.6,
+            jumpForce: -12,
+            canJump: true,
+            doubleJump: true,
+            isSliding: false,
+            rotation: 0,
+            gunAngle: 0,
+            forcedSlide: false,
+            canFly: true,
+            flyingSpeed: -6,
+            descendSpeed: 3,
+            isDead: false,
+            capeAnimation: 0,
+            flyingAcceleration: 0.45,
+            maxFlySpeed: 12,
+            currentFlySpeed: 0,
+            maxAmmo: 200,
+            ammo: 200,
+            isFullAuto: true,
+            currentWeapon: 'rifle',
+            isZoomed: false,
+            isDashing: false,
+            dashCooldown: 0,
+            dashDuration: 15,
+            dashSpeed: 90,
+            lastWKeyState: false,
+            octaLaserAvailable: true,  // New property for one-time use
+            octaLaser: null,  // New property for the 8-beam laser
+            octaLaserRotation: 0  // New property for rotation angle
+        };
 
         // Reset game state
-        this.viewportX = 0;
-        this.gameState.distance = 0;
-        this.gameState.gameWon = false;
+        this.gameState = {
+            distance: 0,
+            winDistance: 15000,
+            gameWon: false,
+            killCount: 0,
+            requiredKills: 100,
+            level: 1,
+            maxEnemies: 7  // Also update the game state max enemies
+        };
 
-        // Clear enemies and bullets
+        // Clear all arrays
         this.enemies = [];
-        this.enemyBullets = [];
         this.deadEnemies = [];
-        this.bloodParticles = [];
+        this.enemyBullets = [];
+        this.lasers = [];
         this.particles = [];
+        this.bloodParticles = [];
         this.grenades = [];
+        this.walls = [];
+
+        // Reset timers and counters
+        this.spawnEnemyTimer = 0;
+        this.lastShotTime = 0;
+        this.specialLaserCooldown = 0;
+        this.specialLaserDuration = 0;
+        this.specialLaser = null;
+        this.nukeReady = true;
+        this.nukeCooldown = 0;
+        this.isNukeAnimationActive = false;
 
         // Reset terrain
         this.terrainDamage.clear();
         this.generateTerrain();
 
-        // Reset nuke properties
-        this.nukeReady = true;
-        this.nukeCooldown = 0;
+        // Reset input states
+        this.keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false,
+            e: false
+        };
+        this.mouseDown = false;
+        this.isChargingGrenade = false;
 
-        this.player.ammo = 200; // Reset ammo on death
+        // Reset camera
+        this.cameraZoom = 1.0;
+        this.player.octaLaserAvailable = true;  // Reset octa laser availability
+        this.player.octaLaser = null;
     }
 
     createBloodEffect(x, y) {
@@ -2120,23 +2349,23 @@ class Game {
     createGrenadeExplosion(x, y, isCharged = false) {
         this.audio.play('explosion');
         // Create explosion particles
-        const particleCount = isCharged ? 100 : 25;
+        const particleCount = isCharged ? 50 : 15; // Reduced particle count
         for (let i = 0; i < particleCount; i++) {
             const angle = (Math.PI * 2 * i) / particleCount;
-            const speed = isCharged ? (5 + Math.random() * 8) : (3 + Math.random() * 4);
+            const speed = isCharged ? (3 + Math.random() * 4) : (2 + Math.random() * 3); // Reduced speeds
             this.particles.push({
                 x: x,
                 y: y,
                 dx: Math.cos(angle) * speed,
                 dy: Math.sin(angle) * speed - 2,
-                life: isCharged ? 80 : 40,
+                life: isCharged ? 60 : 30, // Reduced particle life
                 color: isCharged ? '#FF0000' : '#FF4400',
-                size: isCharged ? (4 + Math.random() * 4) : (2 + Math.random() * 2)
+                size: isCharged ? (3 + Math.random() * 3) : (2 + Math.random() * 2) // Reduced sizes
             });
         }
 
-        // Calculate blast radius
-        const blastRadius = isCharged ? 300 : 150;
+        // Calculate blast radius - significantly reduced
+        const blastRadius = isCharged ? 150 : 75; // Halved blast radius
 
         // Check for enemies in blast radius
         this.enemies = this.enemies.filter(enemy => {
@@ -2145,7 +2374,6 @@ class Game {
             const distance = Math.sqrt(dx * dx + dy * dy);
             
             if (distance <= blastRadius) {
-                // Enemy is within blast radius - kill them
                 enemy.isDying = true;
                 enemy.deathTimer = 0;
                 enemy.speedY = -5;
@@ -2160,26 +2388,66 @@ class Game {
             return true;
         });
 
-        // Create hole in terrain
-        const multiplier = isCharged ? this.chargedGrenadeMultiplier : 1;
-        const baseHoleWidth = isCharged ? (this.canvas.width / 8) : (this.canvas.width / 32);
+        // Create smaller hole in terrain
+        const multiplier = isCharged ? 5 : 1; // Reduced from 10 to 5 for charged grenades
+        const baseHoleWidth = isCharged ? (this.canvas.width / 16) : (this.canvas.width / 48); // Reduced hole width
         const holeWidth = baseHoleWidth * (this.worldWidth / this.canvas.width);
-        const holeDepth = this.grenadeRadius * multiplier;
+        const holeDepth = 20 * multiplier; // Significantly reduced from grenadeRadius * multiplier
+        
+        // Calculate base minimum height (indestructible layer)
+        const baseMinHeight = this.canvas.height * (8/9); // Bottom 1/9 is indestructible
+        
+        // Generate random slope direction for this explosion
+        const slopeDirection = Math.random() < 0.5 ? -1 : 1;
+        const slopeIntensity = 0.2 + Math.random() * 0.3; // Reduced slope intensity
         
         for (let i = 0; i < this.terrain.length; i++) {
             const point = this.terrain[i];
             const dx = point.x - x;
             
             if (Math.abs(dx) < holeWidth) {
+                // Calculate jagged, rounded indestructible layer height
+                const jaggedness = Math.sin(point.x * 0.05) * 20;
+                const noise = Math.sin(point.x * 0.2) * 10;
+                const minHeight = baseMinHeight + jaggedness + noise;
+                
+                // Calculate slope offset based on distance from center
+                const slopeOffset = (dx / holeWidth) * slopeIntensity * 20 * slopeDirection; // Reduced from 40 to 20
+                
                 const distanceFromCenter = Math.abs(dx) / holeWidth;
                 const deformation = holeDepth * (1 - distanceFromCenter * distanceFromCenter);
                 
                 const currentHeight = this.terrainDamage.get(Math.floor(point.x)) || point.originalY;
-                const newHeight = currentHeight + deformation;
+                let newHeight = currentHeight + deformation + slopeOffset;
+                
+                // Ensure we don't go below the jagged minimum height
+                newHeight = Math.max(newHeight, minHeight);
+                
+                // Prevent extreme height differences between adjacent points
+                if (i > 0) {
+                    const prevHeight = this.terrain[i-1].y;
+                    const maxDiff = 30; // Reduced from 50 to 30 for smoother transitions
+                    if (Math.abs(newHeight - prevHeight) > maxDiff) {
+                        newHeight = prevHeight + (maxDiff * Math.sign(newHeight - prevHeight));
+                    }
+                }
                 
                 const key = Math.floor(point.x);
                 this.terrainDamage.set(key, newHeight);
                 point.y = newHeight;
+                
+                // Add some randomness to nearby points for more natural look
+                if (i > 0 && Math.random() < 0.3) {
+                    const prevPoint = this.terrain[i-1];
+                    const prevHeight = this.terrainDamage.get(Math.floor(prevPoint.x)) || prevPoint.originalY;
+                    const smoothedHeight = (newHeight + prevHeight) / 2 + (Math.random() - 0.5) * 5; // Reduced random variation
+                    const smoothedFinalHeight = Math.max(
+                        baseMinHeight + Math.sin(prevPoint.x * 0.05) * 20 + Math.sin(prevPoint.x * 0.2) * 10,
+                        smoothedHeight
+                    );
+                    this.terrainDamage.set(Math.floor(prevPoint.x), smoothedFinalHeight);
+                    prevPoint.y = smoothedFinalHeight;
+                }
             }
         }
     }
@@ -2298,7 +2566,7 @@ class Game {
 
     startLevel2() {
         this.gameState.level = 2;
-        this.gameState.maxEnemies = 10; // Double the enemies
+        this.gameState.maxEnemies = 7; // Keep consistent max enemies in level 2
         this.maxEnemies = this.gameState.maxEnemies;
         // Reset enemy spawn timer to immediately start spawning new enemies
         this.spawnEnemyTimer = this.enemySpawnInterval;
@@ -2437,6 +2705,16 @@ class Game {
 
             this.ctx.restore();
         }
+    }
+
+    createOctaLaser() {
+        this.audio.play('shoot');
+        this.player.octaLaser = {
+            x: this.player.x,
+            y: this.player.y,
+            rotation: 0,
+            duration: 10 * 60  // 10 seconds at 60fps
+        };
     }
 }
 
