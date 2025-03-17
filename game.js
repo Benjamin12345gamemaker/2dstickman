@@ -302,24 +302,29 @@ class Game {
         // Add weapon properties
         this.weapons = {
             rifle: {
-                shootInterval: 100,
-                bulletSpeed: 75,
-                spread: 25,
-                pellets: 25,
+                shootInterval: 150, // Normal speed
+                bulletSpeed: 15,
+                color: '#00FF00',
                 ammoUsage: 1
             },
             shotgun: {
-                shootInterval: 500,
+                shootInterval: 500, // Normal speed
                 bulletSpeed: 12,
                 spread: 0.5,
                 pellets: 8,
                 ammoUsage: 1
             },
             sniper: {
-                shootInterval: 1000,
-                bulletSpeed: 25,
-                spread: 0,
-                zoomFactor: 2
+                shootInterval: 800, // Normal speed
+                bulletSpeed: 30,
+                color: '#0000FF',
+                ammoUsage: 1
+            },
+            minigun: {
+                shootInterval: 50, // Normal speed
+                bulletSpeed: 20,
+                color: '#FFFF00',
+                ammoUsage: 1
             },
             launchGun: {
                 shootInterval: 500,
@@ -327,12 +332,6 @@ class Game {
                 spread: 0,
                 launchForce: 70,
                 color: '#4488ff'
-            },
-            minigun: {
-                shootInterval: 50,
-                bulletSpeed: 60,
-                spread: 0.3,
-                color: '#FFD700'
             },
             landmine: {
                 shootInterval: 1000,
@@ -577,6 +576,14 @@ class Game {
 
         // Add after this.player initialization in the constructor
         this.isMultiplayer = isMultiplayer;
+        
+        // Add bullet bounce limiting properties
+        this.bulletBounceCount = 0;
+        this.bulletBounceResetTime = 0;
+        this.maxBulletBouncesPerSecond = 5;
+
+        // Add bullet lifetime property
+        this.laserLifetime = 180; // 3 seconds at 60fps
     }
 
     handleDeviceOrientation(event) {
@@ -871,7 +878,7 @@ class Game {
                             if (hasMoveDirection) {
                                 // Diagonal up
                                 dashAngle = dashAngle === 0 ? -Math.PI/4 : -3*Math.PI/4;
-                            } else {
+                } else {
                                 dashAngle = -Math.PI/2; // Up
                                 hasMoveDirection = true;
                             }
@@ -982,18 +989,18 @@ class Game {
 
     handleMouseMove(event) {
         if (!this.isMobile) {
-            const rect = this.canvas.getBoundingClientRect();
-            const mouseX = event.clientX - rect.left;
-            const mouseY = event.clientY - rect.top;
-            
-            // Update cursor position
-            this.cursor.x = mouseX;
-            this.cursor.y = mouseY;
-            
-            // Calculate angle between player and mouse
-            const dx = mouseX - (this.player.x - this.viewportX + 10);
-            const dy = mouseY - (this.player.y + 20);
-            this.player.gunAngle = Math.atan2(dy, dx);
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+        
+        // Update cursor position
+        this.cursor.x = mouseX;
+        this.cursor.y = mouseY;
+        
+        // Calculate angle between player and mouse
+        const dx = mouseX - (this.player.x - this.viewportX + 10);
+        const dy = mouseY - (this.player.y + 20);
+        this.player.gunAngle = Math.atan2(dy, dx);
         }
     }
 
@@ -1101,8 +1108,8 @@ class Game {
         const currentTime = Date.now();
         
         if (currentTime - this.lastShotTime > this.shootInterval) {
-            const weapon = this.weapons[this.player.currentWeapon];
-            
+        const weapon = this.weapons[this.player.currentWeapon];
+        
             // Check if we have enough ammo
             if (this.player.ammo < weapon.ammoUsage) {
                 this.audio.play('empty');
@@ -1119,28 +1126,41 @@ class Game {
                 this.throwChargedGrenade();
             }
             else if (this.player.currentWeapon === 'launchGun') {
-                // ... existing launchGun code ...
-            }
-            else if (this.player.currentWeapon === 'shotgun') {
-                // Shotgun: multiple pellets with spread
-                this.audio.play('shotgun');
+                // Launch gun: propels player in opposite direction
+                this.audio.play('shoot');
                 
-                // Create multiple pellets
-                for (let i = 0; i < weapon.pellets; i++) {
-                    const spreadAngle = angle + (Math.random() - 0.5) * weapon.spread;
-                    this.lasers.push({
+                // Create bullet
+                this.lasers.push({
                         x: this.player.x,
                         y: this.player.y,
-                        dx: Math.cos(spreadAngle) * weapon.bulletSpeed,
-                        dy: Math.sin(spreadAngle) * weapon.bulletSpeed,
+                    dx: Math.cos(angle) * weapon.bulletSpeed,
+                    dy: Math.sin(angle) * weapon.bulletSpeed,
+                    color: weapon.color || '#4488ff',
+                    bounceCount: 0,
+                    lifetime: this.laserLifetime
+                });
+                
+                // Remove launch force (recoil)
+                // Apply launch force to player in opposite direction
+                // this.player.speedX -= Math.cos(angle) * weapon.launchForce;
+                // this.player.speedY -= Math.sin(angle) * weapon.launchForce;
+            }
+            else if (this.player.currentWeapon === 'shotgun') {
+                // Shotgun: multiple pellets with perfect accuracy
+                this.audio.play('shotgun');
+                
+                // Create multiple pellets all going to the same spot
+                for (let i = 0; i < weapon.pellets; i++) {
+                        this.lasers.push({
+                        x: this.player.x,
+                        y: this.player.y,
+                        dx: Math.cos(angle) * weapon.bulletSpeed,
+                        dy: Math.sin(angle) * weapon.bulletSpeed,
                         color: '#FFFF00',
-                        bounceCount: 0 // Initialize bounce counter
+                        bounceCount: 0,
+                        lifetime: this.laserLifetime
                     });
                 }
-                
-                // Add stronger recoil for shotgun
-                this.player.speedX -= Math.cos(angle) * 3;
-                this.player.speedY -= Math.sin(angle) * 3;
             }
             else {
                 // Regular weapons (rifle, sniper, minigun)
@@ -1150,13 +1170,10 @@ class Game {
                     y: this.player.y,
                     dx: Math.cos(angle) * weapon.bulletSpeed,
                     dy: Math.sin(angle) * weapon.bulletSpeed,
-                    color: weapon.color || '#00FF00', // Use weapon color if defined
-                    bounceCount: 0 // Initialize bounce counter
+                    color: weapon.color || '#00FF00',
+                    bounceCount: 0,
+                    lifetime: this.laserLifetime
                 });
-                
-                // Add recoil
-                this.player.speedX -= Math.cos(angle);
-                this.player.speedY -= Math.sin(angle);
             }
             
             this.lastShotTime = currentTime;
@@ -1247,9 +1264,9 @@ class Game {
         // Remove viewport offset since x is already in world coordinates
         const worldX = x;
         
-        // Create impact dimensions for a 5-meter deep hole
-        const impactWidth = 5; // Width for bullet impact
-        const impactDepth = 5; // 5 pixels deep (representing 5 meters)
+        // Create impact dimensions for a deeper hole
+        const impactWidth = 8; // Wider impact
+        const impactDepth = 15; // Much deeper impact (increased from 5)
         
         // Find affected terrain points
         for (let i = 0; i < this.terrain.length; i++) {
@@ -1266,11 +1283,11 @@ class Game {
                 // Calculate distance from center for smooth impact edges
                 const distanceFromCenter = Math.abs(dx) / (impactWidth/2);
                 
-                // Create a 5-meter deep crater shape
+                // Create a deeper crater shape
                 // The closer to center, the deeper
                 const deformationAmount = impactDepth * (1 - distanceFromCenter * distanceFromCenter);
                 
-                // Calculate new height with 5-meter impact
+                // Calculate new height with deeper impact
                 // For terrain, HIGHER y value means LOWER position on screen
                 // So we ADD to y to make a dent downward
                 let newHeight = currentHeight;
@@ -1346,7 +1363,16 @@ class Game {
 
         // Update lasers and check for terrain collision
         this.lasers = this.lasers.filter(laser => {
-            // Remove lifetime check - bullets now travel indefinitely
+            // Add lifetime property if it doesn't exist
+            if (laser.lifetime === undefined) {
+                laser.lifetime = this.laserLifetime;
+            }
+            
+            // Decrement lifetime and remove if expired
+            laser.lifetime--;
+            if (laser.lifetime <= 0) {
+                return false;
+            }
             
             // Check wall collisions
             for (let i = this.walls.length - 1; i >= 0; i--) {
@@ -1420,51 +1446,10 @@ class Game {
             // Check terrain collision
             const terrainY = this.getGroundHeight(laser.x);
             if (laser.y >= terrainY) {
-                // Always bounce off the terrain (100% chance) instead of deforming it
-                // Calculate terrain angle for realistic bounce
-                const terrainAngle = this.getTerrainAngle(laser.x);
-                const normalAngle = terrainAngle + Math.PI/2;
-                
-                // Calculate incoming angle
-                const incomingAngle = Math.atan2(laser.dy, laser.dx);
-                
-                // Calculate reflection angle (mirror across normal)
-                const reflectionAngle = 2 * normalAngle - incomingAngle;
-                
-                // Set new velocity with NO energy loss (maintain full speed)
-                const speed = Math.sqrt(laser.dx * laser.dx + laser.dy * laser.dy);
-                laser.dx = Math.cos(reflectionAngle) * speed;
-                laser.dy = Math.sin(reflectionAngle) * speed;
-                
-                // Ensure the bullet is moving upward after bouncing
-                if (laser.dy > 0) {
-                    laser.dy = -laser.dy; // Force upward direction
-                }
-                
-                // Move laser significantly above terrain to prevent immediate re-collision
-                laser.y = terrainY - 5;
-                
-                // Create more energetic spark effect
-                for (let i = 0; i < 5; i++) {
-                    this.particles.push({
-                        x: laser.x,
-                        y: laser.y,
-                        dx: (Math.random() - 0.5) * 3,
-                        dy: (Math.random() - 0.5) * 3 - 1,
-                        life: 15,
-                        color: '#FFFF00',
-                        size: 2 + Math.random()
-                    });
-                }
-                
-                // Play bounce sound
-                this.audio.play('hit');
-                
-                // Increment bounce counter
-                laser.bounceCount = (laser.bounceCount || 0) + 1;
-                
-                // Allow unlimited bounces
-                return true; // Keep the laser
+                // Always create explosion and deform terrain
+                this.createExplosion(laser.x, laser.y);
+                this.deformTerrain(laser.x, laser.y, this.deformationRadius);
+                return false;
             }
             
             // Keep laser if it's within a reasonable range of the player
@@ -1560,8 +1545,8 @@ class Game {
                 this.player.speedX *= 0.99;
                 this.player.speedY *= 0.99;
             } else {
-                this.player.speedX *= this.player.friction;
-                this.player.speedY *= this.player.friction;
+            this.player.speedX *= this.player.friction;
+            this.player.speedY *= this.player.friction;
             }
 
             // Cap speed at 45 for both directions
@@ -1705,7 +1690,7 @@ class Game {
         if (this.viewportX > this.worldWidth - this.canvas.width) {
             this.viewportX = this.worldWidth - this.canvas.width;
         }
-        
+
         // Keep player within screen bounds
         this.player.y = Math.max(20, Math.min(this.canvas.height - 20, this.player.y));
         
@@ -2072,62 +2057,21 @@ class Game {
                 // Check terrain collision
                 const terrainY = this.getGroundHeight(bullet.x);
                 if (bullet.y >= terrainY) {
-                    // Always bounce off the terrain
-                    const terrainAngle = this.getTerrainAngle(bullet.x);
-                    const normalAngle = terrainAngle + Math.PI/2;
+                    // Create explosion and remove bullet instead of bouncing
+                    this.createExplosion(bullet.x, bullet.y);
+                    this.deformTerrain(bullet.x, bullet.y, this.deformationRadius);
                     
-                    // Calculate incoming angle
-                    const incomingAngle = Math.atan2(bullet.dy, bullet.dx);
+                    // Remove bullet
+                    delete remoteBullets[id];
                     
-                    // Calculate reflection angle
-                    const reflectionAngle = 2 * normalAngle - incomingAngle;
-                    
-                    // Set new velocity
-                    const speed = Math.sqrt(bullet.dx * bullet.dx + bullet.dy * bullet.dy);
-                    bullet.dx = Math.cos(reflectionAngle) * speed;
-                    bullet.dy = Math.sin(reflectionAngle) * speed;
-                    
-                    // Ensure the bullet is moving upward after bouncing
-                    if (bullet.dy > 0) {
-                        bullet.dy = -bullet.dy;
-                    }
-                    
-                    // Move bullet above terrain
-                    bullet.y = terrainY - 5;
-                    
-                    // Increment bounce counter
-                    bullet.bounceCount = (bullet.bounceCount || 0) + 1;
-                    
-                    // Create spark effect
-                    for (let i = 0; i < 5; i++) {
-                        this.particles.push({
-                            x: bullet.x,
-                            y: bullet.y,
-                            dx: (Math.random() - 0.5) * 3,
-                            dy: (Math.random() - 0.5) * 3 - 1,
-                            life: 15,
-                            color: '#FFFF00',
-                            size: 2 + Math.random()
-                        });
-                    }
-                    
-                    // Play bounce sound
-                    this.audio.play('hit');
-                    
-                    // Send updated bullet to server
+                    // Send bullet removal to server
                     if (socket && socket.readyState === WebSocket.OPEN) {
                         socket.send(JSON.stringify({
-                            type: 'bulletUpdate',
-                            id: id,
-                            bullet: {
-                                x: bullet.x,
-                                y: bullet.y,
-                                dx: bullet.dx,
-                                dy: bullet.dy,
-                                bounceCount: bullet.bounceCount
-                            }
+                            type: 'bulletRemove',
+                            id: id
                         }));
                     }
+                    return;
                 }
                 
                 // Check collision with player
@@ -3351,55 +3295,43 @@ class Game {
     }
 
     drawDeathScreen() {
-        // Create dark overlay
         this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         
-        // Draw death message
         this.ctx.fillStyle = '#FF0000';
-        this.ctx.font = 'bold 72px Arial';
+        this.ctx.font = '48px Arial';
         this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
-        this.ctx.fillText('YOU DIED', this.canvas.width / 2, this.canvas.height / 3);
+        this.ctx.fillText('YOU DIED', this.canvas.width / 2, this.canvas.height / 2 - 50);
         
-        // Draw stats
+        // Draw kill count
         this.ctx.fillStyle = '#FFFFFF';
-        this.ctx.font = '24px Arial';
-        this.ctx.fillText(`Kills: ${this.gameState.killCount}`, this.canvas.width / 2, this.canvas.height / 2 - 30);
-        this.ctx.fillText(`Distance: ${this.gameState.distance}m`, this.canvas.width / 2, this.canvas.height / 2);
-        this.ctx.fillText(`Wave: ${this.waveSystem.currentWave}`, this.canvas.width / 2, this.canvas.height / 2 + 30);
+        this.ctx.font = '20px Arial';
+        this.ctx.fillText(`Kills: ${this.gameState.killCount}`, this.canvas.width / 2, this.canvas.height / 2);
         
         // Draw retry button
         const retryButtonWidth = 200;
-        const retryButtonHeight = 60;
-        const retryButtonX = this.canvas.width / 2 - retryButtonWidth - 20;
-        const retryButtonY = this.canvas.height * 0.7;
+        const retryButtonHeight = 50;
+        const retryButtonX = this.canvas.width / 2 - retryButtonWidth / 2;
+        const retryButtonY = this.canvas.height / 2 + 50;
         
-        this.ctx.fillStyle = '#00AA00';
+        this.ctx.fillStyle = '#4CAF50';
         this.ctx.fillRect(retryButtonX, retryButtonY, retryButtonWidth, retryButtonHeight);
-        this.ctx.strokeStyle = '#FFFFFF';
-        this.ctx.lineWidth = 3;
-        this.ctx.strokeRect(retryButtonX, retryButtonY, retryButtonWidth, retryButtonHeight);
         
         this.ctx.fillStyle = '#FFFFFF';
-        this.ctx.font = 'bold 30px Arial';
-        this.ctx.fillText('RETRY', retryButtonX + retryButtonWidth / 2, retryButtonY + retryButtonHeight / 2 + 10);
+        this.ctx.font = '24px Arial';
+        this.ctx.fillText('RETRY', this.canvas.width / 2, retryButtonY + retryButtonHeight / 2 + 8);
         
         // Draw quit button
         const quitButtonWidth = 200;
-        const quitButtonHeight = 60;
-        const quitButtonX = this.canvas.width / 2 + 20;
-        const quitButtonY = this.canvas.height * 0.7;
+        const quitButtonHeight = 50;
+        const quitButtonX = this.canvas.width / 2 - quitButtonWidth / 2;
+        const quitButtonY = this.canvas.height / 2 + 120;
         
-        this.ctx.fillStyle = '#AA0000';
+        this.ctx.fillStyle = '#F44336';
         this.ctx.fillRect(quitButtonX, quitButtonY, quitButtonWidth, quitButtonHeight);
-        this.ctx.strokeStyle = '#FFFFFF';
-        this.ctx.lineWidth = 3;
-        this.ctx.strokeRect(quitButtonX, quitButtonY, quitButtonWidth, quitButtonHeight);
         
         this.ctx.fillStyle = '#FFFFFF';
-        this.ctx.font = 'bold 30px Arial';
-        this.ctx.fillText('QUIT', quitButtonX + quitButtonWidth / 2, quitButtonY + quitButtonHeight / 2 + 10);
+        this.ctx.fillText('QUIT', this.canvas.width / 2, quitButtonY + quitButtonHeight / 2 + 8);
         
         // Store button coordinates for click handling
         this.retryButton = {
@@ -3415,6 +3347,9 @@ class Game {
             width: quitButtonWidth,
             height: quitButtonHeight
         };
+        
+        // Draw crosshair on death screen
+        this.drawCrosshair();
     }
 
     drawVictoryScreen() {
@@ -3594,7 +3529,8 @@ class Game {
                     speedX: Math.cos(spreadAngle) * 10,
                     speedY: Math.sin(spreadAngle) * 10,
                     width: 5,
-                    height: 5
+                    height: 5,
+                    lifetime: this.laserLifetime // Initialize lifetime
                 });
                 
                 // Play sound
@@ -3609,6 +3545,17 @@ class Game {
     updateEnemyBullets() {
         // Move bullets and check for collisions
         this.enemyBullets = this.enemyBullets.filter(bullet => {
+            // Add lifetime property if it doesn't exist
+            if (bullet.lifetime === undefined) {
+                bullet.lifetime = this.laserLifetime;
+            }
+            
+            // Decrement lifetime and remove if expired
+            bullet.lifetime--;
+            if (bullet.lifetime <= 0) {
+                return false;
+            }
+            
             // Move the bullet
             bullet.x += bullet.speedX;
             bullet.y += bullet.speedY;
